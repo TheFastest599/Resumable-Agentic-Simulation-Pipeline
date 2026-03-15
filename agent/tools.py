@@ -55,7 +55,7 @@ async def submit_simulation(task_name: str, payload_json: str, conversation_id: 
 @tool
 async def check_job_status(job_id: str) -> str:
     """
-    Check the status and result of a simulation job.
+    Check the current status of a simulation job (non-blocking snapshot).
 
     Args:
         job_id: UUID string of the job

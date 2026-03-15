@@ -3,8 +3,6 @@ import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from core.config import settings
 from core.db import AsyncSessionLocal
 from core.redis_client import dequeue_job, enqueue_job
@@ -36,19 +34,24 @@ async def _heartbeat(job_id: uuid.UUID, stop_event: asyncio.Event) -> None:
             logger.warning("Heartbeat error for job %s: %s", job_id, e)
 
 
-async def _execute_job(job: Job, db: AsyncSession) -> dict:
+async def _execute_job(job: Job) -> dict:
     task_fn = TASK_REGISTRY.get(job.task_name)
     if task_fn is None:
         raise ValueError(f"Unknown task: {job.task_name}")
 
     loop = asyncio.get_running_loop()
+    job_id = job.id
 
     def sync_progress(value: float) -> None:
-        """Called from thread — schedules an async DB update on the event loop."""
+        """Called from executor thread — uses its own pooled session to avoid
+        concurrent-commit conflicts with the outer process_job session."""
         async def _update():
-            job.progress = round(min(max(value, 0.0), 1.0), 4)
             try:
-                await db.commit()
+                async with AsyncSessionLocal() as progress_db:
+                    j = await progress_db.get(Job, job_id)
+                    if j:
+                        j.progress = round(min(max(value, 0.0), 1.0), 4)
+                        await progress_db.commit()
             except Exception:
                 pass
 
@@ -81,7 +84,7 @@ async def process_job(job_id_str: str) -> None:
 
         try:
             logger.info("[%s] Running job %s (%s)", settings.WORKER_ID, job_id_str, job.task_name)
-            result = await _execute_job(job, db)
+            result = await _execute_job(job)
 
             job.status = "COMPLETED"
             job.result = result

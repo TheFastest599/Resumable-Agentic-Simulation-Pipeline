@@ -1,3 +1,5 @@
+import time
+
 import redis.asyncio as aioredis
 
 from core.config import settings
@@ -17,9 +19,7 @@ def get_redis() -> aioredis.Redis:
 async def enqueue_job(job_id: str, priority: int) -> None:
     """Add job to sorted set. Higher priority = higher score = picked first."""
     r = get_redis()
-    import time
-    # Negate priority so ZPOPMAX (highest score) picks highest priority first.
-    # Use negative timestamp as tiebreaker so older jobs win.
+    # Use negative timestamp as tiebreaker so older jobs of equal priority win.
     score = priority * 1e12 - time.time()
     await r.zadd(QUEUE_KEY, {job_id: score})
 
@@ -27,7 +27,7 @@ async def enqueue_job(job_id: str, priority: int) -> None:
 async def dequeue_job(timeout: float = 2.0) -> str | None:
     """Pop the highest-priority job_id, or return None after timeout."""
     r = get_redis()
-    # BZPOPMAX blocks until an element is available or timeout expires.
+    # BZPOPMAX blocks until an element is available or timeout expires (Redis 5.0+).
     result = await r.bzpopmax(QUEUE_KEY, timeout=timeout)
     if result is None:
         return None

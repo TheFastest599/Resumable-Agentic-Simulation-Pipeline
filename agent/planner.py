@@ -68,8 +68,13 @@ ADDITIONAL:
 - game_of_life: Conway's Game of Life. Payload: {"grid_size": <int>, "steps": <int>, "pattern": <"random"|"glider"|"blinker">, "initial_density": <float>}
 - financial_risk_mc: Portfolio risk Monte Carlo (VaR/CVaR). Payload: {"n_assets": <int>, "n_scenarios": <int>, "horizon_days": <int>, "confidence": <float>}
 
-Always use tool calls to submit and check jobs. Do not fabricate results.
-When submitting multiple jobs, call submit_simulation multiple times.
+Rules:
+- Submit each job EXACTLY ONCE. Never re-submit a job you already submitted.
+- After submitting, immediately tell the user the job_id and that it is queued/running.
+- Do NOT call check_job_status after submitting — jobs run asynchronously in the background.
+- Only call check_job_status when the user explicitly asks to check or poll a specific job.
+- If check_job_status returns QUEUED or RUNNING, report the current status and tell the user to check back later. Do NOT submit the job again.
+- Do not fabricate results.
 """
 
 _llm = None
