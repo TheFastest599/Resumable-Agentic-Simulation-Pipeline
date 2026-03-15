@@ -80,7 +80,6 @@ async def check_job_status(job_id: str) -> str:
         "task_name": job.task_name,
         "status": job.status,
         "progress": job.progress,
-        "result": job.result,
         "error": job.error,
         "worker_id": job.worker_id,
     })
@@ -115,21 +114,14 @@ async def aggregate_results(job_ids_json: str) -> str:
         if job:
             results.append({
                 "job_id": str(job.id),
+                "task_name": job.task_name,
                 "status": job.status,
-                "result": job.result,
+                "progress": job.progress,
+                "error": job.error,
             })
 
-    # Average all top-level numeric fields across completed jobs
-    completed = [r for r in results if r["status"] == "COMPLETED" and r["result"]]
-    averages: dict[str, float] = {}
-    if completed:
-        keys = set(k for r in completed for k in (r["result"] or {}).keys())
-        for k in keys:
-            vals = [r["result"][k] for r in completed if isinstance((r["result"] or {}).get(k), (int, float))]
-            if vals:
-                averages[f"avg_{k}"] = sum(vals) / len(vals)
-
-    return json.dumps({"jobs": results, "aggregated": averages, "completed_count": len(completed)})
+    completed_count = sum(1 for r in results if r["status"] == "COMPLETED")
+    return json.dumps({"jobs": results, "completed_count": completed_count})
 
 
 @tool
@@ -158,7 +150,7 @@ async def list_recent_jobs(conversation_id: str) -> str:
             "task_name": j.task_name,
             "status": j.status,
             "progress": j.progress,
-            "result": j.result,
+            "error": j.error,
         }
         for j in jobs
     ])

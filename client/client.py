@@ -35,6 +35,22 @@ import time
 from typing import Any, Optional
 
 import httpx
+from colorama import Fore, Style, init as _colorama_init
+
+_colorama_init(autoreset=True)
+
+# ── colour helpers ─────────────────────────────────────────────────────────────
+def _c(text: str, color: str) -> str:
+    return f"{color}{text}{Style.RESET_ALL}"
+
+def _info(text: str)    -> str: return _c(text, Fore.CYAN)
+def _ok(text: str)      -> str: return _c(text, Fore.GREEN)
+def _warn(text: str)    -> str: return _c(text, Fore.YELLOW)
+def _err(text: str)     -> str: return _c(text, Fore.RED)
+def _dim(text: str)     -> str: return _c(text, Style.DIM)
+def _bold(text: str)    -> str: return _c(text, Style.BRIGHT)
+def _user_msg(text: str)  -> str: return _c(text, Fore.YELLOW)
+def _agent_msg(text: str) -> str: return _c(text, Fore.GREEN)
 
 
 class SimulationClient:
@@ -193,13 +209,14 @@ Commands:
 
 
 def _print_history(messages: list[dict]) -> None:
-    """Print a local history list for display."""
     if not messages:
         return
     print()
     for m in messages:
-        prefix = "You" if m["role"] == "user" else "Agent"
-        print(f"  {prefix}: {m['text']}")
+        if m["role"] == "user":
+            print(f"  {_bold('You')}   : {_user_msg(m['text'])}")
+        else:
+            print(f"  {_bold('Agent')} : {_agent_msg(m['text'])}")
     print()
 
 
@@ -208,30 +225,30 @@ def _repl_chat_loop(
     conversation_id: Optional[str] = None,
 ) -> None:
     """Nested REPL for multi-turn agent chat. /exit returns to main REPL."""
-    # Client-side history for in-session display
     local_history: list[dict] = []
     conv_name: Optional[str] = None
 
     if conversation_id:
-        # Load existing conversation history from server
         try:
             data = client.get_conversation(conversation_id)
             conv_name = data.get("name")
             for m in data.get("messages", []):
                 local_history.append({"role": m["role"], "text": m["text"]})
-            name_str = f" '{conv_name}'" if conv_name else ""
-            print(f"\n  Resuming conversation{name_str}  [{conversation_id}]")
+            name_str = f" '{_bold(conv_name)}'" if conv_name else ""
+            print(f"\n  {_info('Resuming conversation')}{name_str}  {_dim('[' + conversation_id + ']')}")
             _print_history(local_history)
         except Exception as e:
-            print(f"  Warning: could not load history — {e}\n")
+            print(f"  {_warn('Warning:')} could not load history — {e}\n")
     else:
-        print("  Starting new conversation. Type /exit to return.\n")
+        print(f"\n  {_info('New conversation')}  {_dim('(type /exit to return)')}\n")
 
-    prompt_name = conv_name[:16] if conv_name else "chat"
+    # Show chat name once at the top, then use plain "> " prompt
+    if conv_name:
+        print(f"  {_dim('Chat:')} {_bold(conv_name)}\n")
 
     while True:
         try:
-            msg = input(f"  [{prompt_name}]> ").strip()
+            msg = input(f"  {_dim('>')} ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -239,53 +256,62 @@ def _repl_chat_loop(
             continue
         if msg in ("/exit", "/quit"):
             break
-        # Allow /chat-rename inline
         if msg.startswith("/chat-rename") and conversation_id:
             new_name = msg[len("/chat-rename"):].strip()
             if new_name:
                 try:
                     client.rename_conversation(conversation_id, new_name)
                     conv_name = new_name
-                    prompt_name = new_name[:16]
-                    print(f"  Renamed to '{new_name}'")
+                    print(f"  {_ok('Renamed to')} '{new_name}'")
                 except Exception as e:
-                    print(f"  Error: {e}")
+                    print(f"  {_err('Error:')} {e}")
             continue
 
-        # Append user turn to local history
         local_history.append({"role": "user", "text": msg})
+        print(f"  {_bold('You')}   : {_user_msg(msg)}")
 
         try:
             resp = client.chat(msg, conversation_id=conversation_id)
             conversation_id = resp["conversation_id"]
 
-            # First turn: set prompt name from server-assigned auto-name
             if conv_name is None:
                 try:
                     data = client.get_conversation(conversation_id)
                     conv_name = data.get("name")
                     if conv_name:
-                        prompt_name = conv_name[:16]
+                        print(f"\n  {_dim('Chat:')} {_bold(conv_name)}")
                 except Exception:
                     pass
 
             reply = resp["reply"]
             local_history.append({"role": "assistant", "text": reply})
-            print(f"\n  Agent: {reply}\n")
+            print(f"  {_bold('Agent')} : {_agent_msg(reply)}\n")
         except httpx.HTTPStatusError as e:
-            local_history.pop()  # remove optimistic user message
-            print(f"  Error: {e.response.status_code} — {e.response.text}")
+            local_history.pop()
+            print(f"  {_err('Error:')} {e.response.status_code} — {e.response.text}")
         except Exception as e:
             local_history.pop()
-            print(f"  Error: {e}")
+            print(f"  {_err('Error:')} {e}")
+
+
+_STATUS_COLOR = {
+    "COMPLETED": Fore.GREEN,
+    "RUNNING":   Fore.CYAN,
+    "QUEUED":    Fore.YELLOW,
+    "FAILED":    Fore.RED,
+    "CANCELLED": Fore.MAGENTA,
+}
+
+def _colored_status(status: str) -> str:
+    return f"{_STATUS_COLOR.get(status, '')}{status}{Style.RESET_ALL}"
 
 
 def _run_repl(client: SimulationClient) -> None:
-    print("Resumable Agentic Simulation Pipeline  —  interactive mode")
-    print('Type /help for commands or /quit to exit.\n')
+    print(_bold("\n  Resumable Agentic Simulation Pipeline") + _dim("  —  interactive mode"))
+    print(_dim("  Type /help for commands or /quit to exit.\n"))
     while True:
         try:
-            line = input("rasp> ").strip()
+            line = input(_bold(Fore.CYAN + "rasp" + Style.RESET_ALL + "> ")).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -300,49 +326,51 @@ def _run_repl(client: SimulationClient) -> None:
             break
 
         elif cmd == "/help":
-            print(_HELP)
+            print(_dim(_HELP))
 
         elif cmd == "/tasks":
             try:
                 data = client.list_tasks()
-                print(f"\n  {'#':<4} {'Task Name':<28} Description")
-                print("  " + "-" * 70)
+                hdr = "%-4s %-28s %s" % ("#", "Task Name", "Description")
+                print(f"\n  {_bold(hdr)}")
+                print(_dim("  " + "─" * 70))
                 for i, t in enumerate(data["tasks"], 1):
-                    print(f"  {i:<4} {t['name']:<28} {t['description']}")
+                    print(f"  {_dim('%-4d' % i)}{_info('%-28s' % t['name'])} {t['description']}")
                 print()
             except Exception as e:
-                print(f"  Error: {e}")
+                print(f"  {_err('Error:')} {e}")
 
         elif cmd == "/submit":
             if not args:
-                print("  Usage: /submit <task_name> [key=value ...]")
+                print(f"  {_warn('Usage:')} /submit <task_name> [key=value ...]")
                 continue
             task_name = args[0]
             payload = _parse_kv_payload(args[1:])
             try:
                 job = client.submit_job(task_name, payload)
-                print(f"  Submitted: {job['id']}  [{job['status']}]")
+                print(f"  {_ok('Submitted:')} {_dim(job['id'])}  [{_colored_status(job['status'])}]")
             except httpx.HTTPStatusError as e:
-                print(f"  Error: {e.response.status_code} — {e.response.text}")
+                print(f"  {_err('Error:')} {e.response.status_code} — {e.response.text}")
             except Exception as e:
-                print(f"  Error: {e}")
+                print(f"  {_err('Error:')} {e}")
 
         elif cmd == "/status":
             if not args:
-                print("  Usage: /status <job_id>")
+                print(f"  {_warn('Usage:')} /status <job_id>")
                 continue
             try:
                 job = client.get_job(args[0])
-                print(f"  Status:   {job['status']}")
-                print(f"  Progress: {job['progress']:.0%}")
+                print(f"  Status   : {_colored_status(job['status'])}")
+                pct = "%.0f%%" % (job['progress'] * 100)
+                print(f"  Progress : {_info(pct)}")
                 if job.get("result"):
-                    print(f"  Result:   {json.dumps(job['result'], indent=4)}")
+                    print(f"  Result   :\n{_ok(json.dumps(job['result'], indent=4))}")
                 if job.get("error"):
-                    print(f"  Error:    {job['error']}")
+                    print(f"  Error    : {_err(job['error'])}")
             except httpx.HTTPStatusError as e:
-                print(f"  Error: {e.response.status_code} — {e.response.text}")
+                print(f"  {_err('Error:')} {e.response.status_code} — {e.response.text}")
             except Exception as e:
-                print(f"  Error: {e}")
+                print(f"  {_err('Error:')} {e}")
 
         elif cmd == "/list":
             status_filter = None
@@ -361,39 +389,40 @@ def _run_repl(client: SimulationClient) -> None:
                 data = client.list_jobs(status=status_filter, limit=limit)
                 jobs = data["jobs"]
                 if not jobs:
-                    print("  No jobs found.")
+                    print(f"  {_dim('No jobs found.')}")
                 else:
-                    print(f"\n  {'Job ID':<38} {'Task':<24} {'Status':<12} Progress")
-                    print("  " + "-" * 84)
+                    hdr = "%-38s %-24s %-12s %s" % ("Job ID", "Task", "Status", "Progress")
+                    print(f"\n  {_bold(hdr)}")
+                    print(_dim("  " + "─" * 84))
                     for j in jobs:
-                        print(f"  {j['id']:<38} {j['task_name']:<24} {j['status']:<12} {j['progress']:.0%}")
+                        print(f"  {_dim(j['id'])}  {'%-24s' % j['task_name']} {_colored_status(j['status'])}  {_info('%.0f%%' % (j['progress']*100))}")
                     print()
             except Exception as e:
-                print(f"  Error: {e}")
+                print(f"  {_err('Error:')} {e}")
 
         elif cmd == "/cancel":
             if not args:
-                print("  Usage: /cancel <job_id>")
+                print(f"  {_warn('Usage:')} /cancel <job_id>")
                 continue
             try:
                 job = client.cancel_job(args[0])
-                print(f"  Cancelled: {job['id']}  [{job['status']}]")
+                print(f"  {_warn('Cancelled:')} {_dim(job['id'])}  [{_colored_status(job['status'])}]")
             except httpx.HTTPStatusError as e:
-                print(f"  Error: {e.response.status_code} — {e.response.text}")
+                print(f"  {_err('Error:')} {e.response.status_code} — {e.response.text}")
             except Exception as e:
-                print(f"  Error: {e}")
+                print(f"  {_err('Error:')} {e}")
 
         elif cmd == "/resume":
             if not args:
-                print("  Usage: /resume <job_id>")
+                print(f"  {_warn('Usage:')} /resume <job_id>")
                 continue
             try:
                 job = client.resume_job(args[0])
-                print(f"  Resumed: {job['id']}  [{job['status']}]")
+                print(f"  {_ok('Resumed:')} {_dim(job['id'])}  [{_colored_status(job['status'])}]")
             except httpx.HTTPStatusError as e:
-                print(f"  Error: {e.response.status_code} — {e.response.text}")
+                print(f"  {_err('Error:')} {e.response.status_code} — {e.response.text}")
             except Exception as e:
-                print(f"  Error: {e}")
+                print(f"  {_err('Error:')} {e}")
 
         elif cmd == "/chats":
             limit = 20
@@ -404,17 +433,18 @@ def _run_repl(client: SimulationClient) -> None:
             try:
                 convs = client.list_conversations(limit=limit)
                 if not convs:
-                    print("  No conversations yet.")
+                    print(f"  {_dim('No conversations yet.')}")
                 else:
-                    print(f"\n  {'#':<4} {'Name':<22} {'ID':<38} Created")
-                    print("  " + "-" * 84)
+                    hdr = "%-4s %-22s %-38s %s" % ("#", "Name", "ID", "Created")
+                    print(f"\n  {_bold(hdr)}")
+                    print(_dim("  " + "─" * 84))
                     for i, c in enumerate(convs, 1):
                         name = (c.get("name") or "(unnamed)")[:20]
                         created = c["created_at"][:16].replace("T", " ")
-                        print(f"  {i:<4} {name:<22} {c['id']:<38} {created}")
+                        print(f"  {_dim('%-4d' % i)}{_info('%-22s' % name)} {_dim(c['id'])}  {created}")
                     print()
             except Exception as e:
-                print(f"  Error: {e}")
+                print(f"  {_err('Error:')} {e}")
 
         elif cmd == "/chat":
             conv_id = args[0] if args else None
@@ -422,32 +452,32 @@ def _run_repl(client: SimulationClient) -> None:
 
         elif cmd == "/chat-rename":
             if len(args) < 2:
-                print("  Usage: /chat-rename <conv_id> <new name>")
+                print(f"  {_warn('Usage:')} /chat-rename <conv_id> <new name>")
                 continue
             conv_id = args[0]
             new_name = " ".join(args[1:])
             try:
                 conv = client.rename_conversation(conv_id, new_name)
-                print(f"  Renamed to '{conv['name']}'")
+                print(f"  {_ok('Renamed to')} '{conv['name']}'")
             except httpx.HTTPStatusError as e:
-                print(f"  Error: {e.response.status_code} — {e.response.text}")
+                print(f"  {_err('Error:')} {e.response.status_code} — {e.response.text}")
             except Exception as e:
-                print(f"  Error: {e}")
+                print(f"  {_err('Error:')} {e}")
 
         elif cmd == "/chat-delete":
             if not args:
-                print("  Usage: /chat-delete <conv_id>")
+                print(f"  {_warn('Usage:')} /chat-delete <conv_id>")
                 continue
             try:
                 client.delete_conversation(args[0])
-                print(f"  Deleted conversation {args[0]}")
+                print(f"  {_ok('Deleted conversation')} {_dim(args[0])}")
             except httpx.HTTPStatusError as e:
-                print(f"  Error: {e.response.status_code} — {e.response.text}")
+                print(f"  {_err('Error:')} {e.response.status_code} — {e.response.text}")
             except Exception as e:
-                print(f"  Error: {e}")
+                print(f"  {_err('Error:')} {e}")
 
         else:
-            print(f"  Unknown command: {cmd!r}  (type /help for commands)")
+            print(f"  {_err('Unknown command:')} {cmd!r}  {_dim('(type /help for commands)')}")
 
 
 # ─── arg-based CLI ────────────────────────────────────────────────────────────

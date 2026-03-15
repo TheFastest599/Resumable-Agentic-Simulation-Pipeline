@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +45,39 @@ async def agent_chat(
         conversation_id=conversation_id,
         reply=reply,
         job_ids_referenced=job_ids,
+    )
+
+
+@router.post("/chat/stream")
+async def agent_chat_stream(
+    req: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis_dep),
+):
+    """
+    Streaming version of /agent/chat using Server-Sent Events.
+
+    Each line is: data: <json>\\n\\n
+
+    Event types:
+      {"type": "token",      "content": "..."}
+      {"type": "tool_start", "name": "...", "input": {...}}
+      {"type": "tool_end",   "name": "...", "output": "..."}
+      {"type": "done",       "conversation_id": "...", "job_ids": [...]}
+      {"type": "error",      "message": "..."}
+    """
+    from agent.planner import stream_agent_chat
+
+    conversation_id = req.conversation_id or uuid.uuid4()
+    return StreamingResponse(
+        stream_agent_chat(
+            message=req.message,
+            conversation_id=conversation_id,
+            db=db,
+            redis=redis,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
