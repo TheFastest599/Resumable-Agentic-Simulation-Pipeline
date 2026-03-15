@@ -21,47 +21,60 @@ from models.message import Message
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a scientific simulation assistant. Submit jobs, check status, aggregate results.
+SYSTEM_PROMPT = """You are a scientific simulation assistant.
+You can submit simulation jobs, check their status, aggregate results, and list recent jobs.
 
-Tasks and their payload parameters (all keys are optional; use sensible defaults):
-monte_carlo_pi(iterations:int)
-option_pricing(S,K,T,r,sigma:float; simulations:int)
-random_walk(steps,particles:int; dimensions:1|2|3)
-monte_carlo_integration(samples:int; function:sin|cos|exp|x2|x3|sqrt; a,b:float)
-heat_diffusion_1d(n_points,steps:int; diffusion_coeff:float)
-heat_diffusion_2d(grid_size,steps:int; diffusion_coeff:float)
-chemical_diffusion(grid_size,steps:int; diffusion_coeff:float)
-population_spread(grid_size,steps:int; growth_rate:float)
-matrix_multiply(size:int)
-eigenvalue_decomp(size:int)
-svd_decomposition(rows,cols:int)
-pca_covariance(n_samples,n_features,n_components:int)
-projectile_motion(initial_velocity,angle_deg,drag_coeff:float)
-lotka_volterra(prey_initial,predator_initial:float; steps:int)
-pendulum_motion(length,damping,initial_angle_deg:float; steps:int)
-spring_mass(mass,spring_constant,damping:float; steps:int)
-fluid_advection(n_particles,steps:int)
-network_spread(n_nodes,steps:int; infection_prob,recovery_prob:float)
-traffic_flow(road_length,n_vehicles,steps:int)
-forest_fire(grid_size,steps:int; p_tree:float)
-diffusion_reaction(grid_size,steps:int; f,k:float)
-quantum_well(n_points:int; well_depth,well_width:float)
-brownian_motion(n_particles,steps:int; diffusion_coeff:float; dimensions:1|2|3)
-heat_conduction_varying(n_points,steps:int; conductivity_profile:step|linear|gaussian)
-fractal_dla(grid_size,n_particles:int)
-wave_propagation(grid_size,steps:int; wave_speed:float; dimensions:1|2)
-population_genetics(population_size,generations,n_replicates:int; initial_allele_freq:float)
-epidemic_sir(population,steps:int; beta,gamma:float; model:SIR|SEIR)
-game_of_life(grid_size,steps:int; pattern:random|glider|blinker; initial_density:float)
-financial_risk_mc(n_assets,n_scenarios,horizon_days:int; confidence:float)
+Available simulation tasks (30 total):
+
+MONTE CARLO SIMULATIONS:
+- monte_carlo_pi: Estimate π. Payload: {"iterations": <int>}
+- option_pricing: European option pricing. Payload: {"S": <float>, "K": <float>, "T": <float>, "r": <float>, "sigma": <float>, "simulations": <int>}
+- random_walk: Particle random walk. Payload: {"steps": <int>, "particles": <int>, "dimensions": <1|2|3>}
+- monte_carlo_integration: Numerical integration. Payload: {"samples": <int>, "function": <"sin"|"cos"|"exp"|"x2"|"x3"|"sqrt">, "a": <float>, "b": <float>}
+
+HEAT & DIFFUSION:
+- heat_diffusion_1d: 1D heat diffusion. Payload: {"n_points": <int>, "steps": <int>, "diffusion_coeff": <float>}
+- heat_diffusion_2d: 2D heat diffusion. Payload: {"grid_size": <int>, "steps": <int>, "diffusion_coeff": <float>}
+- chemical_diffusion: Chemical species diffusion. Payload: {"grid_size": <int>, "steps": <int>, "diffusion_coeff": <float>}
+- population_spread: Fisher-KPP population spread. Payload: {"grid_size": <int>, "steps": <int>, "growth_rate": <float>}
+
+LINEAR ALGEBRA:
+- matrix_multiply: Matrix multiplication benchmark. Payload: {"size": <int>}
+- eigenvalue_decomp: Eigenvalue decomposition. Payload: {"size": <int>}
+- svd_decomposition: SVD decomposition. Payload: {"rows": <int>, "cols": <int>}
+- pca_covariance: PCA / covariance analysis. Payload: {"n_samples": <int>, "n_features": <int>, "n_components": <int>}
+
+PHYSICS / KINEMATICS:
+- projectile_motion: Projectile with drag. Payload: {"initial_velocity": <float>, "angle_deg": <float>, "drag_coeff": <float>}
+- lotka_volterra: Predator-prey model. Payload: {"prey_initial": <float>, "predator_initial": <float>, "steps": <int>}
+- pendulum_motion: Damped pendulum. Payload: {"length": <float>, "damping": <float>, "initial_angle_deg": <float>, "steps": <int>}
+- spring_mass: Spring-mass system. Payload: {"mass": <float>, "spring_constant": <float>, "damping": <float>, "steps": <int>}
+
+FLUID / NETWORK:
+- fluid_advection: Particle advection in 2D flow. Payload: {"n_particles": <int>, "steps": <int>}
+- network_spread: SIR spread on random graph. Payload: {"n_nodes": <int>, "infection_prob": <float>, "recovery_prob": <float>, "steps": <int>}
+- traffic_flow: Nagel-Schreckenberg traffic CA. Payload: {"road_length": <int>, "n_vehicles": <int>, "steps": <int>}
+- forest_fire: Forest fire / percolation CA. Payload: {"grid_size": <int>, "p_tree": <float>, "steps": <int>}
+
+ADDITIONAL:
+- diffusion_reaction: Gray-Scott reaction-diffusion. Payload: {"grid_size": <int>, "steps": <int>, "f": <float>, "k": <float>}
+- quantum_well: Quantum particle in 1D well. Payload: {"n_points": <int>, "well_depth": <float>, "well_width": <float>}
+- brownian_motion: Brownian motion / stochastic process. Payload: {"n_particles": <int>, "steps": <int>, "diffusion_coeff": <float>, "dimensions": <1|2|3>}
+- heat_conduction_varying: 1D heat with varying conductivity. Payload: {"n_points": <int>, "steps": <int>, "conductivity_profile": <"step"|"linear"|"gaussian">}
+- fractal_dla: Diffusion-limited aggregation fractal. Payload: {"grid_size": <int>, "n_particles": <int>}
+- wave_propagation: Wave equation simulation. Payload: {"dimensions": <1|2>, "grid_size": <int>, "steps": <int>, "wave_speed": <float>}
+- population_genetics: Wright-Fisher allele drift. Payload: {"population_size": <int>, "generations": <int>, "initial_allele_freq": <float>, "n_replicates": <int>}
+- epidemic_sir: SIR/SEIR epidemic model. Payload: {"model": <"SIR"|"SEIR">, "population": <int>, "beta": <float>, "gamma": <float>, "steps": <int>}
+- game_of_life: Conway's Game of Life. Payload: {"grid_size": <int>, "steps": <int>, "pattern": <"random"|"glider"|"blinker">, "initial_density": <float>}
+- financial_risk_mc: Portfolio risk Monte Carlo (VaR/CVaR). Payload: {"n_assets": <int>, "n_scenarios": <int>, "horizon_days": <int>, "confidence": <float>}
 
 Rules:
-- Submit each job EXACTLY ONCE. Never re-submit.
-- After submitting, tell the user the job_id and that it is queued.
-- Do NOT call check_job_status after submitting. Jobs run in the background.
-- Only call check_job_status when the user explicitly asks to check a job.
-- If status is QUEUED or RUNNING, report it and tell the user to check back later.
-- Never fabricate results.
+- Submit each job EXACTLY ONCE. Never re-submit a job you already submitted.
+- After submitting, immediately tell the user the job_id and that it is queued/running.
+- Do NOT call check_job_status after submitting — jobs run asynchronously in the background.
+- Only call check_job_status when the user explicitly asks to check or poll a specific job.
+- If check_job_status returns QUEUED or RUNNING, report the current status and tell the user to check back later. Do NOT submit the job again.
+- Do not fabricate results.
 """
 
 _llm = None
@@ -92,7 +105,7 @@ def get_agent():
     return _agent
 
 
-async def _load_history(db: AsyncSession, conversation_id: uuid.UUID, max_messages: int = 8) -> list:
+async def _load_history(db: AsyncSession, conversation_id: uuid.UUID, max_messages: int = 20) -> list:
     stmt = (
         select(Message)
         .where(Message.conversation_id == conversation_id)
@@ -104,7 +117,8 @@ async def _load_history(db: AsyncSession, conversation_id: uuid.UUID, max_messag
 
     history = []
     for msg in messages:
-        text = msg.content.get("text", "") if isinstance(msg.content, dict) else str(msg.content)
+        text = msg.content.get("text", "") if isinstance(
+            msg.content, dict) else str(msg.content)
         if msg.role == "user":
             history.append(HumanMessage(content=text))
         elif msg.role == "assistant":
@@ -170,14 +184,17 @@ async def run_agent_chat(
                 conv.name = message[:20].strip()
                 await db.commit()
 
-        messages: list[Any] = [SystemMessage(content=SYSTEM_PROMPT)] + history + [HumanMessage(content=message)]
+        messages: list[Any] = [SystemMessage(
+            content=SYSTEM_PROMPT)] + history + [HumanMessage(content=message)]
 
         agent = get_agent()
         response = await agent.ainvoke({"messages": messages})
 
-        ai_messages = [m for m in response["messages"] if isinstance(m, AIMessage)]
+        ai_messages = [m for m in response["messages"]
+                       if isinstance(m, AIMessage)]
         raw = ai_messages[-1].content if ai_messages else ""
-        reply = raw if isinstance(raw, str) else " ".join(p.get("text", "") for p in raw if isinstance(p, dict))
+        reply = raw if isinstance(raw, str) else " ".join(
+            p.get("text", "") for p in raw if isinstance(p, dict))
         reply = reply or "I was unable to process your request."
 
         await _save_message(db, conversation_id, "user", message)
@@ -233,7 +250,8 @@ async def stream_agent_chat(
                 conv.name = message[:20].strip()
                 await db.commit()
 
-        messages: list[Any] = [SystemMessage(content=SYSTEM_PROMPT)] + history + [HumanMessage(content=message)]
+        messages: list[Any] = [SystemMessage(
+            content=SYSTEM_PROMPT)] + history + [HumanMessage(content=message)]
 
         agent = get_agent()
 
@@ -244,7 +262,8 @@ async def stream_agent_chat(
             if kind == "on_chat_model_stream":
                 chunk = event["data"].get("chunk")
                 if chunk:
-                    text = chunk.content if isinstance(chunk.content, str) else ""
+                    text = chunk.content if isinstance(
+                        chunk.content, str) else ""
                     if text:
                         reply_parts.append(text)
                         yield _sse({"type": "token", "content": text})
@@ -266,7 +285,8 @@ async def stream_agent_chat(
                     "output": output if isinstance(output, str) else _json.dumps(output),
                 })
 
-        reply = "".join(reply_parts).strip() or "I was unable to process your request."
+        reply = "".join(reply_parts).strip(
+        ) or "I was unable to process your request."
 
         await _save_message(db, conversation_id, "user", message)
         job_ids = _extract_job_ids(reply)
