@@ -1,14 +1,23 @@
 """
-LangGraph ReAct agent backed by Groq LLM.
+Tool-loop agent backed by Groq LLM.
 Manages conversation memory in PostgreSQL.
+
+Pattern: LLM decides tools → execute ALL in parallel → feed results back → repeat
+until no more tool calls or max steps reached. Typically 2 LLM calls per turn.
 """
+import json
 import logging
+import re
 import uuid
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_groq import ChatGroq
-from langgraph.prebuilt import create_react_agent
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +29,8 @@ from models.conversation import Conversation
 from models.message import Message
 
 logger = logging.getLogger(__name__)
+
+MAX_STEPS = 8
 
 SYSTEM_PROMPT = """You are a scientific simulation assistant.
 You can submit simulation jobs, check their status, aggregate results, and list recent jobs.
@@ -69,43 +80,61 @@ ADDITIONAL:
 - financial_risk_mc: Portfolio risk Monte Carlo (VaR/CVaR). Payload: {"n_assets": <int>, "n_scenarios": <int>, "horizon_days": <int>, "confidence": <float>}
 
 Rules:
-- Submit each job EXACTLY ONCE. Never re-submit a job you already submitted.
-- After submitting, immediately tell the user the job_id and that it is queued/running.
-- Do NOT call check_job_status after submitting — jobs run asynchronously in the background.
-- Only call check_job_status when the user explicitly asks to check or poll a specific job.
-- If check_job_status returns QUEUED or RUNNING, report the current status and tell the user to check back later. Do NOT submit the job again.
-- Do not fabricate results.
+- When the user asks for multiple jobs, call submit_simulation for ALL of them in ONE response using parallel tool calls.
+- Submit each job EXACTLY ONCE. Never re-submit.
+- IMPORTANT: After submitting, you MUST include every job_id from the tool results in your reply. Format each as: task_name → job_id (QUEUED). Never omit job IDs.
+- Do NOT call check_job_status after submitting — jobs run asynchronously.
+- Only call check_job_status when the user explicitly asks.
+- Do not fabricate results. Keep responses concise.
 """
 
 _llm = None
+_llm_with_tools = None
 
 
-def _get_llm() -> ChatGroq:
-    global _llm
+def _get_llm():
+    global _llm, _llm_with_tools
     if _llm is None:
         _llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             groq_api_key=settings.GROQ_API_KEY,
             temperature=0.0,
+            max_retries=2,
         )
-    return _llm
+        _llm_with_tools = _llm.bind_tools(ALL_TOOLS)
+    return _llm_with_tools
 
 
-def _build_agent():
-    return create_react_agent(_get_llm(), tools=ALL_TOOLS)
+# Build a name→callable lookup for tool execution
+_TOOL_MAP = {t.name: t for t in ALL_TOOLS}
 
 
-_agent = None
+async def _execute_tool_calls(tool_calls: list[dict]) -> list[ToolMessage]:
+    """Execute all tool calls and return ToolMessages."""
+    results = []
+    for tc in tool_calls:
+        tool_fn = _TOOL_MAP.get(tc["name"])
+        if tool_fn is None:
+            results.append(ToolMessage(
+                content=json.dumps({"error": f"Unknown tool: {tc['name']}"}),
+                tool_call_id=tc["id"],
+            ))
+            continue
+        try:
+            output = await tool_fn.ainvoke(tc["args"])
+            results.append(ToolMessage(
+                content=output if isinstance(output, str) else json.dumps(output),
+                tool_call_id=tc["id"],
+            ))
+        except Exception as e:
+            results.append(ToolMessage(
+                content=json.dumps({"error": str(e)}),
+                tool_call_id=tc["id"],
+            ))
+    return results
 
 
-def get_agent():
-    global _agent
-    if _agent is None:
-        _agent = _build_agent()
-    return _agent
-
-
-async def _load_history(db: AsyncSession, conversation_id: uuid.UUID, max_messages: int = 20) -> list:
+async def _load_history(db: AsyncSession, conversation_id: uuid.UUID, max_messages: int = 8) -> list:
     stmt = (
         select(Message)
         .where(Message.conversation_id == conversation_id)
@@ -151,13 +180,40 @@ async def _save_message(
 
 
 def _extract_job_ids(text: str) -> list[str]:
-    """Extract UUID-like strings from agent response."""
-    import re
     return re.findall(
         r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
         text,
         re.IGNORECASE,
     )
+
+
+async def _tool_loop(messages: list) -> str:
+    """
+    Simple tool loop: LLM → execute all tool calls → LLM → repeat.
+    Stops when LLM returns no tool calls or MAX_STEPS reached.
+    """
+    llm = _get_llm()
+
+    for _ in range(MAX_STEPS):
+        response: AIMessage = await llm.ainvoke(messages)
+        messages.append(response)
+
+        # No tool calls → final text response
+        if not response.tool_calls:
+            raw = response.content
+            if isinstance(raw, str):
+                return raw
+            if isinstance(raw, list):
+                return " ".join(
+                    p.get("text", "") for p in raw if isinstance(p, dict)
+                )
+            return str(raw)
+
+        # Execute ALL tool calls in parallel, append results
+        tool_results = await _execute_tool_calls(response.tool_calls)
+        messages.extend(tool_results)
+
+    return "I reached the maximum number of steps. Please try a simpler request."
 
 
 async def run_agent_chat(
@@ -167,7 +223,7 @@ async def run_agent_chat(
     redis: aioredis.Redis,
 ) -> tuple[str, list[str]]:
     """
-    Run the ReAct agent for one conversation turn.
+    Run the tool-loop agent for one conversation turn.
     Returns (reply_text, referenced_job_ids).
     """
     db_token = _db_ctx.set(db)
@@ -184,18 +240,14 @@ async def run_agent_chat(
                 conv.name = message[:20].strip()
                 await db.commit()
 
-        messages: list[Any] = [SystemMessage(
-            content=SYSTEM_PROMPT)] + history + [HumanMessage(content=message)]
+        messages: list[Any] = (
+            [SystemMessage(content=SYSTEM_PROMPT)]
+            + history
+            + [HumanMessage(content=message)]
+        )
 
-        agent = get_agent()
-        response = await agent.ainvoke({"messages": messages})
-
-        ai_messages = [m for m in response["messages"]
-                       if isinstance(m, AIMessage)]
-        raw = ai_messages[-1].content if ai_messages else ""
-        reply = raw if isinstance(raw, str) else " ".join(
-            p.get("text", "") for p in raw if isinstance(p, dict))
-        reply = reply or "I was unable to process your request."
+        reply = await _tool_loop(messages)
+        reply = reply.strip() or "I was unable to process your request."
 
         await _save_message(db, conversation_id, "user", message)
         job_ids = _extract_job_ids(reply)
@@ -220,25 +272,21 @@ async def stream_agent_chat(
     redis: aioredis.Redis,
 ):
     """
-    Async generator that yields SSE-formatted lines for one conversation turn.
+    Streaming tool-loop agent. Yields SSE-formatted lines.
 
-    Event types emitted:
-      {"type": "token",      "content": "..."}          — LLM text chunk
-      {"type": "tool_start", "name": "...", "input": {}} — tool invocation begins
-      {"type": "tool_end",   "name": "...", "output": "..."} — tool result
-      {"type": "done",       "conversation_id": "...", "job_ids": [...]} — final
-      {"type": "error",      "message": "..."}           — on failure
+    Event types:
+      {"type": "token",      "content": "..."}
+      {"type": "tool_start", "name": "...", "input": {...}}
+      {"type": "tool_end",   "name": "...", "output": "..."}
+      {"type": "done",       "conversation_id": "...", "job_ids": [...]}
+      {"type": "error",      "message": "..."}
     """
-    import json as _json
-
     def _sse(payload: dict) -> str:
-        return f"data: {_json.dumps(payload)}\n\n"
+        return f"data: {json.dumps(payload)}\n\n"
 
     db_token = _db_ctx.set(db)
     redis_token = _redis_ctx.set(redis)
     conv_token = _conv_id_ctx.set(conversation_id)
-
-    reply_parts: list[str] = []
 
     try:
         await _ensure_conversation(db, conversation_id)
@@ -250,43 +298,72 @@ async def stream_agent_chat(
                 conv.name = message[:20].strip()
                 await db.commit()
 
-        messages: list[Any] = [SystemMessage(
-            content=SYSTEM_PROMPT)] + history + [HumanMessage(content=message)]
+        messages: list[Any] = (
+            [SystemMessage(content=SYSTEM_PROMPT)]
+            + history
+            + [HumanMessage(content=message)]
+        )
 
-        agent = get_agent()
+        llm = _get_llm()
+        reply_parts: list[str] = []
 
-        async for event in agent.astream_events({"messages": messages}, version="v2"):
-            kind = event["event"]
+        for _ in range(MAX_STEPS):
+            # Stream this LLM call
+            tool_calls_acc: list[dict] = []
+            async for chunk in llm.astream(messages):
+                # Accumulate tool calls from chunks
+                if chunk.tool_call_chunks:
+                    for tc_chunk in chunk.tool_call_chunks:
+                        if tc_chunk.get("index") is not None:
+                            idx = tc_chunk["index"]
+                            while len(tool_calls_acc) <= idx:
+                                tool_calls_acc.append({"name": "", "args": "", "id": ""})
+                            if tc_chunk.get("name"):
+                                tool_calls_acc[idx]["name"] = tc_chunk["name"]
+                            if tc_chunk.get("id"):
+                                tool_calls_acc[idx]["id"] = tc_chunk["id"]
+                            if tc_chunk.get("args"):
+                                tool_calls_acc[idx]["args"] += tc_chunk["args"]
 
-            # LLM token chunks
-            if kind == "on_chat_model_stream":
-                chunk = event["data"].get("chunk")
-                if chunk:
-                    text = chunk.content if isinstance(
-                        chunk.content, str) else ""
-                    if text:
-                        reply_parts.append(text)
-                        yield _sse({"type": "token", "content": text})
+                # Stream text tokens
+                text = chunk.content if isinstance(chunk.content, str) else ""
+                if text:
+                    reply_parts.append(text)
+                    yield _sse({"type": "token", "content": text})
 
-            # Tool call starts
-            elif kind == "on_tool_start":
-                yield _sse({
-                    "type": "tool_start",
-                    "name": event.get("name", ""),
-                    "input": event["data"].get("input", {}),
-                })
+            # If no tool calls, we're done
+            if not tool_calls_acc or not tool_calls_acc[0]["name"]:
+                break
 
-            # Tool call ends
-            elif kind == "on_tool_end":
-                output = event["data"].get("output", "")
-                yield _sse({
-                    "type": "tool_end",
-                    "name": event.get("name", ""),
-                    "output": output if isinstance(output, str) else _json.dumps(output),
-                })
+            # Parse accumulated tool call args from strings to dicts
+            parsed_calls = []
+            for tc in tool_calls_acc:
+                try:
+                    args = json.loads(tc["args"]) if isinstance(tc["args"], str) else tc["args"]
+                except json.JSONDecodeError:
+                    args = {}
+                parsed_calls.append({"name": tc["name"], "args": args, "id": tc["id"]})
 
-        reply = "".join(reply_parts).strip(
-        ) or "I was unable to process your request."
+            # Build the AI message with tool calls for message history
+            ai_msg = AIMessage(content="", tool_calls=[
+                {"name": tc["name"], "args": tc["args"], "id": tc["id"]}
+                for tc in parsed_calls
+            ])
+            messages.append(ai_msg)
+
+            # Emit tool_start events
+            for tc in parsed_calls:
+                yield _sse({"type": "tool_start", "name": tc["name"], "input": tc["args"]})
+
+            # Execute all tool calls
+            tool_results = await _execute_tool_calls(parsed_calls)
+            messages.extend(tool_results)
+
+            # Emit tool_end events
+            for tc, result in zip(parsed_calls, tool_results):
+                yield _sse({"type": "tool_end", "name": tc["name"], "output": result.content})
+
+        reply = "".join(reply_parts).strip() or "I was unable to process your request."
 
         await _save_message(db, conversation_id, "user", message)
         job_ids = _extract_job_ids(reply)

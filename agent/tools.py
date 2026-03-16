@@ -1,8 +1,8 @@
 """
-LangGraph tool definitions for the simulation agent.
+Tool definitions for the simulation agent.
 
-Tools receive db and redis via module-level context variables set by planner.py
-before invoking the agent, avoiding global mutable state leaks across requests.
+Tools receive db, redis, and conversation_id via module-level context variables
+set by planner.py before invoking the agent.
 """
 import json
 import uuid
@@ -25,14 +25,13 @@ def _get_ctx():
 
 
 @tool
-async def submit_simulation(task_name: str, payload_json: str, conversation_id: str) -> str:
+async def submit_simulation(task_name: str, payload_json: str) -> str:
     """
     Submit a scientific simulation job.
 
     Args:
-        task_name: One of: monte_carlo_pi, random_walk, heat_diffusion, matrix_multiply, option_pricing
+        task_name: The simulation task name (e.g. monte_carlo_pi, random_walk)
         payload_json: JSON string of task parameters, e.g. '{"iterations": 1000000}'
-        conversation_id: The current conversation ID (UUID string)
 
     Returns:
         JSON string with job_id and status.
@@ -55,13 +54,13 @@ async def submit_simulation(task_name: str, payload_json: str, conversation_id: 
 @tool
 async def check_job_status(job_id: str) -> str:
     """
-    Check the current status of a simulation job (non-blocking snapshot).
+    Check the current status of a simulation job.
 
     Args:
         job_id: UUID string of the job
 
     Returns:
-        JSON string with status, progress (0–1), and result if completed.
+        JSON string with status and progress.
     """
     from services.job_service import get_job
 
@@ -86,15 +85,39 @@ async def check_job_status(job_id: str) -> str:
 
 
 @tool
+async def list_recent_jobs() -> str:
+    """
+    List recent simulation jobs for the current conversation.
+
+    Returns:
+        JSON array of recent jobs with id, task_name, status, and progress.
+    """
+    from services.job_service import list_jobs_for_conversation
+
+    db, _, conv_id = _get_ctx()
+    jobs = await list_jobs_for_conversation(db, conv_id)
+    return json.dumps([
+        {
+            "job_id": str(j.id),
+            "task_name": j.task_name,
+            "status": j.status,
+            "progress": j.progress,
+            "error": j.error,
+        }
+        for j in jobs
+    ])
+
+
+@tool
 async def aggregate_results(job_ids_json: str) -> str:
     """
-    Aggregate numeric results from multiple completed jobs.
+    Aggregate status of multiple jobs.
 
     Args:
         job_ids_json: JSON array of job ID strings, e.g. '["uuid1", "uuid2"]'
 
     Returns:
-        JSON string with per-job results and averaged numeric fields.
+        JSON string with per-job status and completed count.
     """
     from services.job_service import get_job
 
@@ -122,38 +145,6 @@ async def aggregate_results(job_ids_json: str) -> str:
 
     completed_count = sum(1 for r in results if r["status"] == "COMPLETED")
     return json.dumps({"jobs": results, "completed_count": completed_count})
-
-
-@tool
-async def list_recent_jobs(conversation_id: str) -> str:
-    """
-    List recent simulation jobs associated with this conversation.
-
-    Args:
-        conversation_id: UUID string of the conversation
-
-    Returns:
-        JSON array of recent jobs with id, task_name, status, and progress.
-    """
-    from services.job_service import list_jobs_for_conversation
-
-    db, _, _ = _get_ctx()
-    try:
-        cid = uuid.UUID(conversation_id)
-    except ValueError:
-        return json.dumps({"error": f"Invalid conversation_id: {conversation_id}"})
-
-    jobs = await list_jobs_for_conversation(db, cid)
-    return json.dumps([
-        {
-            "job_id": str(j.id),
-            "task_name": j.task_name,
-            "status": j.status,
-            "progress": j.progress,
-            "error": j.error,
-        }
-        for j in jobs
-    ])
 
 
 ALL_TOOLS = [submit_simulation, check_job_status, aggregate_results, list_recent_jobs]
