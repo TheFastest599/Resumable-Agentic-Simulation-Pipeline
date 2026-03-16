@@ -25,6 +25,7 @@ async def submit_job(
         priority=req.priority,
         max_retries=req.max_retries,
         status="PENDING",
+        conversation_id=req.conversation_id,
     )
     db.add(job)
     await db.flush()  # get job.id
@@ -121,11 +122,14 @@ async def resume_job(
 async def list_jobs(
     db: AsyncSession,
     status: Optional[str] = None,
+    conversation_id: Optional[uuid.UUID] = None,
     limit: int = 50,
 ) -> list[Job]:
     stmt = select(Job).order_by(Job.created_at.desc()).limit(limit)
     if status:
         stmt = stmt.where(Job.status == status)
+    if conversation_id:
+        stmt = stmt.where(Job.conversation_id == conversation_id)
     result = await db.execute(stmt)
     return list(result.scalars().all())
 

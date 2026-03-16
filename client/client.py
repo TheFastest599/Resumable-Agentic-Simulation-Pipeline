@@ -10,7 +10,10 @@ Programmatic usage:
 CLI (arg-based):
     python -m client.client submit monte_carlo_pi --iterations 1000000 --wait
     python -m client.client status <job_id>
-    python -m client.client list [--status COMPLETED] [--limit 20]
+    python -m client.client list [--status COMPLETED] [--conversation-id <id>] [--limit 20]
+    python -m client.client pause <job_id>
+    python -m client.client cancel <job_id>
+    python -m client.client resume <job_id>
     python -m client.client tasks
     python -m client.client chats [--limit 20]
     python -m client.client chat "Run 3 pi simulations" [--conversation-id <id>]
@@ -21,6 +24,10 @@ Interactive REPL (no args):
     rasp> /submit monte_carlo_pi iterations=500000
     rasp> /status <job_id>
     rasp> /list --status COMPLETED
+    rasp> /list --conv <conv_id>
+    rasp> /pause  <job_id>
+    rasp> /cancel <job_id>
+    rasp> /resume <job_id>
     rasp> /chats
     rasp> /chat                  ← new conversation
     rasp> /chat <conv_id>        ← resume existing conversation
@@ -87,16 +94,28 @@ class SimulationClient:
         r.raise_for_status()
         return r.json()
 
-    def list_jobs(self, status: Optional[str] = None, limit: int = 50) -> dict:
+    def list_jobs(
+        self,
+        status: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> dict:
         params: dict[str, Any] = {"limit": limit}
         if status:
             params["status"] = status
+        if conversation_id:
+            params["conversation_id"] = conversation_id
         r = httpx.get(self._url("/jobs"), params=params, timeout=self.timeout)
         r.raise_for_status()
         return r.json()
 
     def cancel_job(self, job_id: str) -> dict:
         r = httpx.post(self._url(f"/jobs/{job_id}/cancel"), timeout=self.timeout)
+        r.raise_for_status()
+        return r.json()
+
+    def pause_job(self, job_id: str) -> dict:
+        r = httpx.post(self._url(f"/jobs/{job_id}/pause"), timeout=self.timeout)
         r.raise_for_status()
         return r.json()
 
@@ -190,12 +209,13 @@ def _parse_kv_payload(tokens: list[str]) -> dict[str, Any]:
 
 _HELP = """
 Commands:
-  /tasks                            List all available simulation tasks
-  /submit <task> [key=val ...]      Submit a job  (e.g. /submit monte_carlo_pi iterations=500000)
-  /status <job_id>                  Get job status and result
-  /list [--status S] [--limit N]    List jobs
-  /cancel <job_id>                  Cancel a queued/running job
-  /resume <job_id>                  Resume a failed/cancelled job
+  /tasks                                          List all available simulation tasks
+  /submit <task> [key=val ...]                    Submit a job  (e.g. /submit monte_carlo_pi iterations=500000)
+  /status <job_id>                               Get job status and result
+  /list [--status S] [--conv <conv_id>] [--limit N]  List jobs (filter by status or conversation)
+  /cancel <job_id>                               Cancel a queued/running job
+  /pause  <job_id>                               Pause a queued/running job
+  /resume <job_id>                               Resume a paused/failed/cancelled job
 
   /chats [--limit N]                List recent conversations (name + id)
   /chat                             Start a new conversation
@@ -374,11 +394,15 @@ def _run_repl(client: SimulationClient) -> None:
 
         elif cmd == "/list":
             status_filter = None
+            conv_filter = None
             limit = 20
             i = 0
             while i < len(args):
                 if args[i] == "--status" and i + 1 < len(args):
                     status_filter = args[i + 1]
+                    i += 2
+                elif args[i] in ("--conv", "--conversation-id") and i + 1 < len(args):
+                    conv_filter = args[i + 1]
                     i += 2
                 elif args[i] == "--limit" and i + 1 < len(args):
                     limit = int(args[i + 1])
@@ -386,7 +410,7 @@ def _run_repl(client: SimulationClient) -> None:
                 else:
                     i += 1
             try:
-                data = client.list_jobs(status=status_filter, limit=limit)
+                data = client.list_jobs(status=status_filter, conversation_id=conv_filter, limit=limit)
                 jobs = data["jobs"]
                 if not jobs:
                     print(f"  {_dim('No jobs found.')}")
@@ -407,6 +431,18 @@ def _run_repl(client: SimulationClient) -> None:
             try:
                 job = client.cancel_job(args[0])
                 print(f"  {_warn('Cancelled:')} {_dim(job['id'])}  [{_colored_status(job['status'])}]")
+            except httpx.HTTPStatusError as e:
+                print(f"  {_err('Error:')} {e.response.status_code} — {e.response.text}")
+            except Exception as e:
+                print(f"  {_err('Error:')} {e}")
+
+        elif cmd == "/pause":
+            if not args:
+                print(f"  {_warn('Usage:')} /pause <job_id>")
+                continue
+            try:
+                job = client.pause_job(args[0])
+                print(f"  {_warn('Paused:')} {_dim(job['id'])}  [{_colored_status(job['status'])}]")
             except httpx.HTTPStatusError as e:
                 print(f"  {_err('Error:')} {e.response.status_code} — {e.response.text}")
             except Exception as e:
@@ -510,14 +546,19 @@ def main() -> None:
     # list
     p_list = sub.add_parser("list", help="List jobs")
     p_list.add_argument("--status", default=None)
+    p_list.add_argument("--conversation-id", default=None, dest="conversation_id")
     p_list.add_argument("--limit", type=int, default=20)
 
     # cancel
     p_cancel = sub.add_parser("cancel", help="Cancel a job")
     p_cancel.add_argument("job_id")
 
+    # pause
+    p_pause = sub.add_parser("pause", help="Pause a queued/running job")
+    p_pause.add_argument("job_id")
+
     # resume
-    p_resume = sub.add_parser("resume", help="Resume a failed/cancelled job")
+    p_resume = sub.add_parser("resume", help="Resume a paused/failed/cancelled job")
     p_resume.add_argument("job_id")
 
     # tasks
@@ -558,13 +599,17 @@ def main() -> None:
             print("Error:", job["error"])
 
     elif args.command == "list":
-        data = client.list_jobs(status=args.status, limit=args.limit)
+        data = client.list_jobs(status=args.status, conversation_id=args.conversation_id, limit=args.limit)
         for j in data["jobs"]:
             print(f"  {j['id']}  {j['task_name']:<28}  {j['status']:<12}  {j['progress']:.0%}")
 
     elif args.command == "cancel":
         job = client.cancel_job(args.job_id)
         print(f"Cancelled: {job['id']}  [{job['status']}]")
+
+    elif args.command == "pause":
+        job = client.pause_job(args.job_id)
+        print(f"Paused: {job['id']}  [{job['status']}]")
 
     elif args.command == "resume":
         job = client.resume_job(args.job_id)

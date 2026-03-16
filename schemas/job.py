@@ -11,6 +11,7 @@ class JobSubmitRequest(BaseModel):
     priority: int = Field(default=5, ge=1, le=10)
     max_retries: int = Field(default=3, ge=0)
     depends_on: list[uuid.UUID] = Field(default_factory=list)
+    conversation_id: uuid.UUID | None = None
 
 
 class JobResponse(BaseModel):
@@ -25,6 +26,7 @@ class JobResponse(BaseModel):
     retry_count: int
     max_retries: int
     worker_id: str | None
+    conversation_id: uuid.UUID | None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

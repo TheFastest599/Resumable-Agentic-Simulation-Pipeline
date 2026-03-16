@@ -37,10 +37,11 @@ async def create_job(
 @router.get("", response_model=JobListResponse)
 async def read_jobs(
     status: Optional[str] = None,
+    conversation_id: Optional[uuid.UUID] = None,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
 ):
-    jobs = await list_jobs(db, status=status, limit=limit)
+    jobs = await list_jobs(db, status=status, conversation_id=conversation_id, limit=limit)
     return JobListResponse(
         jobs=[JobResponse.model_validate(j) for j in jobs],
         total=len(jobs),

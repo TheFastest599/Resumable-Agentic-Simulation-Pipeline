@@ -41,7 +41,7 @@ async def submit_simulation(task_name: str, payload_json: str, depends_on_json: 
     from schemas.job import JobSubmitRequest
     from services.job_service import submit_job
 
-    db, redis, _ = _get_ctx()
+    db, redis, conv_id = _get_ctx()
 
     try:
         payload: dict[str, Any] = json.loads(payload_json) if payload_json else {}
@@ -54,7 +54,7 @@ async def submit_simulation(task_name: str, payload_json: str, depends_on_json: 
     except (json.JSONDecodeError, ValueError):
         pass
 
-    req = JobSubmitRequest(task_name=task_name, payload=payload, depends_on=depends_on)
+    req = JobSubmitRequest(task_name=task_name, payload=payload, depends_on=depends_on, conversation_id=conv_id)
     job = await submit_job(db, redis, req)
     return json.dumps({"job_id": str(job.id), "status": job.status, "task_name": job.task_name})
 
@@ -100,10 +100,10 @@ async def list_recent_jobs() -> str:
     Returns:
         JSON array of recent jobs with id, task_name, status, and progress.
     """
-    from services.job_service import list_jobs_for_conversation
+    from services.job_service import list_jobs
 
     db, _, conv_id = _get_ctx()
-    jobs = await list_jobs_for_conversation(db, conv_id)
+    jobs = await list_jobs(db, conversation_id=conv_id, limit=1000 if conv_id else 20)
     return json.dumps([
         {
             "job_id": str(j.id),
