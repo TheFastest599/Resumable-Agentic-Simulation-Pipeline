@@ -96,10 +96,11 @@ def _get_llm():
     global _llm, _llm_with_tools
     if _llm is None:
         _llm = ChatGroq(
-            model="llama-3.1-8b-instant",
-            groq_api_key=settings.GROQ_API_KEY,
-            temperature=0.0,
+            model="openai/gpt-oss-20b",
+            api_key=settings.GROQ_API_KEY,
+            max_tokens=3000,
             max_retries=2,
+            reasoning_effort="medium",
         )
         _llm_with_tools = _llm.bind_tools(ALL_TOOLS)
     return _llm_with_tools
@@ -123,7 +124,8 @@ async def _execute_tool_calls(tool_calls: list[dict]) -> list[ToolMessage]:
         try:
             output = await tool_fn.ainvoke(tc["args"])
             results.append(ToolMessage(
-                content=output if isinstance(output, str) else json.dumps(output),
+                content=output if isinstance(
+                    output, str) else json.dumps(output),
                 tool_call_id=tc["id"],
             ))
         except Exception as e:
@@ -317,7 +319,8 @@ async def stream_agent_chat(
                         if tc_chunk.get("index") is not None:
                             idx = tc_chunk["index"]
                             while len(tool_calls_acc) <= idx:
-                                tool_calls_acc.append({"name": "", "args": "", "id": ""})
+                                tool_calls_acc.append(
+                                    {"name": "", "args": "", "id": ""})
                             if tc_chunk.get("name"):
                                 tool_calls_acc[idx]["name"] = tc_chunk["name"]
                             if tc_chunk.get("id"):
@@ -339,10 +342,12 @@ async def stream_agent_chat(
             parsed_calls = []
             for tc in tool_calls_acc:
                 try:
-                    args = json.loads(tc["args"]) if isinstance(tc["args"], str) else tc["args"]
+                    args = json.loads(tc["args"]) if isinstance(
+                        tc["args"], str) else tc["args"]
                 except json.JSONDecodeError:
                     args = {}
-                parsed_calls.append({"name": tc["name"], "args": args, "id": tc["id"]})
+                parsed_calls.append(
+                    {"name": tc["name"], "args": args, "id": tc["id"]})
 
             # Build the AI message with tool calls for message history
             ai_msg = AIMessage(content="", tool_calls=[
@@ -363,7 +368,8 @@ async def stream_agent_chat(
             for tc, result in zip(parsed_calls, tool_results):
                 yield _sse({"type": "tool_end", "name": tc["name"], "output": result.content})
 
-        reply = "".join(reply_parts).strip() or "I was unable to process your request."
+        reply = "".join(reply_parts).strip(
+        ) or "I was unable to process your request."
 
         await _save_message(db, conversation_id, "user", message)
         job_ids = _extract_job_ids(reply)
