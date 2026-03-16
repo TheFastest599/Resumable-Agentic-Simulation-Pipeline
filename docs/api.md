@@ -36,6 +36,7 @@ Returns `{"status": "ok"}`.
 | `priority` | int | 5 | 1–10, higher runs first |
 | `max_retries` | int | 3 | ≥ 0 |
 | `depends_on` | UUID[] | `[]` | Job IDs that must complete first (DAG) |
+| `conversation_id` | UUID | null | Set automatically when submitted via agent |
 
 **Response:** `JobResponse` (see schema below)
 
@@ -45,15 +46,19 @@ Returns `{"status": "ok"}`.
 
 **Query params:**
 - `status` (optional) — filter by status string (e.g. `QUEUED`, `RUNNING`, `COMPLETED`)
-- `limit` (default: 50)
+- `conversation_id` (optional) — filter to jobs submitted within a specific conversation
+- `page` (default: 1) — page number; page size is 20
+- `limit` (default: 20)
 
-**Response:**
+**Response:** `JobSummary` objects — `payload` and `result` fields are **excluded** (use `GET /jobs/{id}` for full data).
 ```json
 {
-  "jobs": [JobResponse, ...],
-  "total": 3
+  "jobs": [JobSummary, ...],
+  "total": 42
 }
 ```
+
+`total` reflects the true count across all pages (useful for pagination UI).
 
 ---
 
@@ -95,6 +100,8 @@ Resets `retry_count` to 0. A paused job re-runs from scratch (task functions are
 
 ### JobResponse Schema
 
+Returned by `POST /jobs` and `GET /jobs/{id}` (includes all fields):
+
 ```json
 {
   "id": "uuid",
@@ -108,6 +115,7 @@ Resets `retry_count` to 0. A paused job re-runs from scratch (task functions are
   "retry_count": 0,
   "max_retries": 3,
   "worker_id": "worker-1",
+  "conversation_id": "uuid or null",
   "created_at": "2026-03-16T10:00:00Z",
   "started_at": "2026-03-16T10:00:01Z",
   "finished_at": "2026-03-16T10:00:02Z",
@@ -122,12 +130,19 @@ Resets `retry_count` to 0. A paused job re-runs from scratch (task functions are
 | `result` | Task output dict, null until COMPLETED |
 | `error` | Error message string, null unless FAILED |
 | `worker_id` | Which worker ran the job |
+| `conversation_id` | UUID of the agent conversation that submitted this job, or null |
+
+### JobSummary Schema
+
+Returned by `GET /jobs` (list endpoint). Same as `JobResponse` but **without `payload` and `result`** — these JSONB fields are excluded at the query level to keep list responses fast.
 
 ---
 
 ## Agent
 
-### `POST /agent/chat` — Chat with agent
+### `POST /agent/chat` — Chat with agent (blocking)
+
+Used by the **Python CLI client**. Blocks until the agent finishes and returns the full reply as JSON.
 
 **Request body:**
 ```json
@@ -151,9 +166,9 @@ Resets `retry_count` to 0. A paused job re-runs from scratch (task functions are
 
 ---
 
-### `POST /agent/chat/stream` — Streaming chat
+### `POST /agent/chat/stream` — Streaming chat (SSE)
 
-Same request body as `/agent/chat`. Returns `text/event-stream`.
+Used by the **Next.js web client**. Same request body as `/agent/chat`. Returns `text/event-stream` — starts emitting immediately as the LLM generates tokens.
 
 Each event is a `data: <json>\n\n` line:
 
@@ -169,7 +184,7 @@ Each event is a `data: <json>\n\n` line:
 
 ### `GET /agent/conversations` — List conversations
 
-**Query params:** `limit` (default: 50)
+**Query params:** `limit` (default: 50), `offset` (default: 0)
 
 **Response:**
 ```json

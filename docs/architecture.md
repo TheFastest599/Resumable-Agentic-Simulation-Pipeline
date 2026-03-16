@@ -9,21 +9,24 @@ RASP (Resumable Agentic Simulation Pipeline) is a distributed scientific simulat
 ```
 User / Client
      │
-     ▼
-Python CLI Client (client/client.py)
+     ├── Python CLI Client (client/client.py)  ──► HTTP / SSE
      │
-     ▼ HTTP
+     └── Next.js Web Client (web-client/)       ──► HTTP / SSE
+              │
+              ▼
 FastAPI Server (api/main.py)
      │
-     ├── POST /agent/chat ──► LLM Agent (agent/planner.py)
-     │                            │  Groq: openai/gpt-oss-20b
-     │                            │  Tools: submit, check, list, aggregate
-     │                            └── agent/tools.py
+     ├── POST /agent/chat        ──► LLM Agent (agent/planner.py)  [blocking, used by Python client]
+     ├── POST /agent/chat/stream ──► LLM Agent (streaming SSE)     [used by web client]
+     │                                    │  Groq: openai/gpt-oss-120b
+     │                                    │  Tools: submit, check, list, aggregate
+     │                                    └── agent/tools.py
      │
      ├── POST /jobs ──────────────────────────────────┐
-     ├── GET  /jobs                                   │
+     ├── GET  /jobs  (JobSummary — no payload/result) │
      ├── GET  /jobs/{id}                              │
      ├── POST /jobs/{id}/cancel                       │
+     ├── POST /jobs/{id}/pause                        │
      ├── POST /jobs/{id}/resume                       │
      │                                                │
      ├── GET  /tasks ─► Task Registry (tasks/registry.py)
@@ -33,7 +36,7 @@ FastAPI Server (api/main.py)
      │   messages, dependencies        sorted set: job_queue
      │
      └── Background Scheduler (services/scheduler.py)
-              Every 30s: recover crashed/orphaned jobs
+              Every 30s: recover crashed/orphaned jobs + anti-starvation boost
 
                    ▼
           Workers (workers/worker.py)
@@ -51,9 +54,10 @@ FastAPI Server (api/main.py)
 | Web framework | FastAPI (async) |
 | Database ORM | SQLAlchemy 2.0 async + asyncpg |
 | Job queue | Redis sorted set (Memurai on Windows) |
-| LLM provider | Groq API (`openai/gpt-oss-20b`) |
+| LLM provider | Groq API (`openai/gpt-oss-120b`) |
 | LLM framework | LangChain + LangGraph |
 | Simulation | NumPy |
+| Web client | Next.js 15 App Router, TanStack Query, Zustand, shadcn/ui |
 | Config | pydantic-settings (.env) |
 | Client colors | colorama |
 
@@ -99,3 +103,8 @@ GROQ_API_KEY=your_key_here
 | Redis connection | `core/redis_client.py` |
 | Config / env | `core/config.py` |
 | Background scheduler | `services/scheduler.py` |
+| Web client root | `web-client/src/` |
+| API layer (axios) | `web-client/src/lib/api.js` |
+| TanStack Query hooks | `web-client/src/lib/queries.js` |
+| SSE consumer hook | `web-client/src/hooks/useStream.js` |
+| Global chat state | `web-client/src/store/chatStore.js` |

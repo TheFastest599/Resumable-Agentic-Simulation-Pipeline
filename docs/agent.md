@@ -25,7 +25,7 @@ This is equivalent to the Vercel AI SDK's `ToolLoopAgent` — fewer LLM calls th
 
 ```python
 ChatGroq(
-    model="openai/gpt-oss-20b",
+    model="openai/gpt-oss-120b",
     api_key=GROQ_API_KEY,
     max_tokens=3000,
     reasoning_effort="medium",
@@ -46,7 +46,7 @@ Returns `{job_id, task_name, status, progress, error, worker_id}`.
 **Does not return the result dict** — keeps token usage low. Full result available via `GET /jobs/{id}`.
 
 ### `list_recent_jobs()`
-Lists jobs associated with the current conversation (via `related_job_ids` on messages).
+Lists jobs associated with the current conversation. If a `conversation_id` is active, calls `list_jobs(conversation_id=conv_id, limit=1000)` to return all jobs submitted in this conversation; otherwise falls back to the 20 most recent jobs globally.
 Returns `[{job_id, task_name, status, progress, error}]`.
 
 ### `aggregate_results(job_ids_json)`
@@ -139,9 +139,18 @@ Agent reply:
 
 The DAG infrastructure (`JobDependency` table + `check_and_unblock()` in `services/dag_executor.py`) handles the rest — no polling needed.
 
-## Streaming
+## Chat Endpoints
 
-`POST /agent/chat/stream` returns Server-Sent Events (`text/event-stream`).
+There are two ways to call the agent, suited to different clients:
+
+| Endpoint | Transport | Used by |
+|----------|-----------|---------|
+| `POST /agent/chat` | Plain HTTP (blocks until reply) | Python CLI client |
+| `POST /agent/chat/stream` | Server-Sent Events (streams tokens) | Next.js web client |
+
+Both accept the same request body (`message`, optional `conversation_id`). The blocking endpoint returns the full reply as JSON once the agent finishes. The streaming endpoint starts emitting events immediately.
+
+### SSE event protocol (`/agent/chat/stream`)
 
 Each event is a JSON object on a `data:` line:
 
@@ -156,6 +165,8 @@ data: {"type": "done", "conversation_id": "...", "job_ids": ["..."]}
 
 data: {"type": "error", "message": "..."}
 ```
+
+The web client consumes this with `fetch` + `ReadableStream` (not `EventSource`, which doesn't support POST bodies). On `token` it appends to the current assistant message; on `tool_start`/`tool_end` it shows/hides live tool-call indicator chips; on `done` it sets the conversation ID and invalidates TanStack Query caches.
 
 ## Source Files
 
