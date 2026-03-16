@@ -87,6 +87,9 @@ Rules:
 - Do NOT call check_job_status after submitting — jobs run asynchronously.
 - Only call check_job_status when the user explicitly asks.
 - Do not fabricate results. Keep responses concise.
+- When mentioning a job in your reply, always include both the raw ID and a clickable link on separate lines, like:
+  **Job ID:** `<uuid>`
+  **Link:** [View job](http://localhost:3000/jobs/<uuid>)
 """
 
 _llm = None
@@ -97,7 +100,7 @@ def _get_llm():
     global _llm, _llm_with_tools
     if _llm is None:
         _llm = ChatGroq(
-            model="openai/gpt-oss-20b",
+            model="openai/gpt-oss-120b",
             api_key=settings.GROQ_API_KEY,
             max_tokens=3000,
             max_retries=2,
