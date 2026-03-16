@@ -25,13 +25,15 @@ def _get_ctx():
 
 
 @tool
-async def submit_simulation(task_name: str, payload_json: str) -> str:
+async def submit_simulation(task_name: str, payload_json: str, depends_on_json: str = "[]") -> str:
     """
     Submit a scientific simulation job.
 
     Args:
         task_name: The simulation task name (e.g. monte_carlo_pi, random_walk)
         payload_json: JSON string of task parameters, e.g. '{"iterations": 1000000}'
+        depends_on_json: JSON array of job_id strings this job depends on, e.g. '["uuid1"]'.
+            The job stays PENDING until all listed jobs complete. Omit or pass '[]' for no dependencies.
 
     Returns:
         JSON string with job_id and status.
@@ -46,7 +48,13 @@ async def submit_simulation(task_name: str, payload_json: str) -> str:
     except json.JSONDecodeError:
         payload = {}
 
-    req = JobSubmitRequest(task_name=task_name, payload=payload)
+    depends_on: list[uuid.UUID] = []
+    try:
+        depends_on = [uuid.UUID(jid) for jid in json.loads(depends_on_json)]
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    req = JobSubmitRequest(task_name=task_name, payload=payload, depends_on=depends_on)
     job = await submit_job(db, redis, req)
     return json.dumps({"job_id": str(job.id), "status": job.status, "task_name": job.task_name})
 

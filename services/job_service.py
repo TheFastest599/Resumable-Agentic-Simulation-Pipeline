@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Optional
 
@@ -5,7 +6,9 @@ import redis.asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.redis_client import enqueue_job, remove_job_from_queue
+from core.redis_client import enqueue_job, remove_job_from_queue, set_pause_flag
+
+logger = logging.getLogger(__name__)
 from models.dependency import JobDependency
 from models.job import Job
 from schemas.job import JobSubmitRequest
@@ -67,6 +70,32 @@ async def cancel_job(
     return job
 
 
+async def pause_job(
+    db: AsyncSession,
+    redis: aioredis.Redis,
+    job_id: uuid.UUID,
+) -> Optional[Job]:
+    job = await get_job(db, job_id)
+    if job is None:
+        return None
+
+    if job.status == "QUEUED":
+        # Remove from Redis immediately — no worker involved yet
+        await remove_job_from_queue(str(job_id))
+        job.status = "PAUSED"
+        await db.commit()
+        await db.refresh(job)
+        logger.info("Paused QUEUED job %s", job.id)
+    elif job.status == "RUNNING":
+        # Signal the worker; it will set status=PAUSED at the next progress checkpoint
+        await set_pause_flag(str(job_id))
+        logger.info("Pause flag set for RUNNING job %s — worker will pause at next checkpoint", job.id)
+    else:
+        logger.info("Pause skipped — job %s is in state %s", job.id, job.status)
+
+    return job
+
+
 async def resume_job(
     db: AsyncSession,
     redis: aioredis.Redis,
@@ -75,14 +104,17 @@ async def resume_job(
     job = await get_job(db, job_id)
     if job is None:
         return None
-    if job.status not in ("FAILED", "CANCELLED", "PAUSED"):
+    if job.status not in ("PENDING", "FAILED", "CANCELLED", "PAUSED"):
+        logger.info("Resume skipped — job %s is in state %s", job.id, job.status)
         return job
 
     job.status = "QUEUED"
     job.error = None
+    job.retry_count = 0
     await db.commit()
     await db.refresh(job)
     await enqueue_job(str(job.id), job.priority)
+    logger.info("Resumed job %s — re-enqueued with priority %d", job.id, job.priority)
     return job
 
 

@@ -12,6 +12,7 @@ from services.job_service import (
     cancel_job,
     get_job,
     list_jobs,
+    pause_job,
     resume_job,
     submit_job,
 )
@@ -61,6 +62,18 @@ async def cancel_job_route(
     redis: aioredis.Redis = Depends(get_redis_dep),
 ):
     job = await cancel_job(db, redis, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobResponse.model_validate(job)
+
+
+@router.post("/{job_id}/pause", response_model=JobResponse)
+async def pause_job_route(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis_dep),
+):
+    job = await pause_job(db, redis, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return JobResponse.model_validate(job)

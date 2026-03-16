@@ -3,13 +3,17 @@ import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 
-from core.config import settings
 from core.db import AsyncSessionLocal
-from core.redis_client import dequeue_job, enqueue_job
+from core.redis_client import check_pause_flag, clear_pause_flag, dequeue_job, enqueue_job
 from models.job import Job
 from tasks.registry import TASK_REGISTRY
 
 logger = logging.getLogger(__name__)
+
+
+class PauseSignal(Exception):
+    """Raised in the task thread to interrupt execution and pause the job."""
+
 
 LEASE_DURATION = 60  # seconds
 HEARTBEAT_INTERVAL = 10  # seconds
@@ -26,12 +30,17 @@ async def _heartbeat(job_id: uuid.UUID, stop_event: asyncio.Event) -> None:
             async with AsyncSessionLocal() as db:
                 job = await db.get(Job, job_id)
                 if job and job.status == "RUNNING":
-                    job.lease_expiry = datetime.now(timezone.utc) + timedelta(seconds=LEASE_DURATION)
+                    new_expiry = datetime.now(timezone.utc) + timedelta(seconds=LEASE_DURATION)
+                    job.lease_expiry = new_expiry
                     await db.commit()
+                    logger.debug("[heartbeat] Extended lease for job %s until %s", job_id, new_expiry.isoformat())
+                elif job:
+                    logger.debug("[heartbeat] Job %s is no longer RUNNING (status=%s) — stopping heartbeat", job_id, job.status)
+                    break
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.warning("Heartbeat error for job %s: %s", job_id, e)
+            logger.warning("[heartbeat] Error for job %s: %s", job_id, e)
 
 
 async def _execute_job(job: Job) -> dict:
@@ -44,24 +53,30 @@ async def _execute_job(job: Job) -> dict:
 
     def sync_progress(value: float) -> None:
         """Called from executor thread — uses its own pooled session to avoid
-        concurrent-commit conflicts with the outer process_job session."""
+        concurrent-commit conflicts with the outer process_job session.
+        Raises PauseSignal if a pause has been requested for this job."""
         async def _update():
-            try:
-                async with AsyncSessionLocal() as progress_db:
-                    j = await progress_db.get(Job, job_id)
-                    if j:
-                        j.progress = round(min(max(value, 0.0), 1.0), 4)
-                        await progress_db.commit()
-            except Exception:
-                pass
+            if await check_pause_flag(str(job_id)):
+                raise PauseSignal()
+            async with AsyncSessionLocal() as progress_db:
+                j = await progress_db.get(Job, job_id)
+                if j:
+                    j.progress = round(min(max(value, 0.0), 1.0), 4)
+                    await progress_db.commit()
 
-        asyncio.run_coroutine_threadsafe(_update(), loop)
+        future = asyncio.run_coroutine_threadsafe(_update(), loop)
+        try:
+            future.result(timeout=5)
+        except PauseSignal:
+            raise
+        except Exception:
+            pass
 
     result = await loop.run_in_executor(None, task_fn, job.payload, sync_progress)
     return result
 
 
-async def process_job(job_id_str: str) -> None:
+async def process_job(job_id_str: str, worker_id: str = "worker-1") -> None:
     async with AsyncSessionLocal() as db:
         job = await db.get(Job, uuid.UUID(job_id_str))
         if job is None:
@@ -75,7 +90,7 @@ async def process_job(job_id_str: str) -> None:
         # Mark RUNNING and set initial lease
         job.status = "RUNNING"
         job.started_at = datetime.now(timezone.utc)
-        job.worker_id = settings.WORKER_ID
+        job.worker_id = worker_id
         job.lease_expiry = datetime.now(timezone.utc) + timedelta(seconds=LEASE_DURATION)
         await db.commit()
 
@@ -83,7 +98,7 @@ async def process_job(job_id_str: str) -> None:
         heartbeat_task = asyncio.create_task(_heartbeat(job.id, stop_event))
 
         try:
-            logger.info("[%s] Running job %s (%s)", settings.WORKER_ID, job_id_str, job.task_name)
+            logger.info("[%s] Running job %s (%s)", worker_id, job_id_str, job.task_name)
             result = await _execute_job(job)
 
             job.status = "COMPLETED"
@@ -91,7 +106,7 @@ async def process_job(job_id_str: str) -> None:
             job.progress = 1.0
             job.finished_at = datetime.now(timezone.utc)
             await db.commit()
-            logger.info("[%s] Job %s COMPLETED", settings.WORKER_ID, job_id_str)
+            logger.info("[%s] Job %s COMPLETED", worker_id, job_id_str)
 
             # Unblock DAG dependents
             from services.dag_executor import check_and_unblock
@@ -100,11 +115,17 @@ async def process_job(job_id_str: str) -> None:
         except asyncio.CancelledError:
             job.status = "CANCELLED"
             await db.commit()
-            logger.info("[%s] Job %s CANCELLED", settings.WORKER_ID, job_id_str)
+            logger.info("[%s] Job %s CANCELLED", worker_id, job_id_str)
             raise
 
+        except PauseSignal:
+            job.status = "PAUSED"
+            await db.commit()
+            await clear_pause_flag(job_id_str)
+            logger.info("[%s] Job %s PAUSED at progress %.4f", worker_id, job_id_str, job.progress)
+
         except Exception as exc:
-            logger.exception("[%s] Job %s FAILED: %s", settings.WORKER_ID, job_id_str, exc)
+            logger.exception("[%s] Job %s FAILED: %s", worker_id, job_id_str, exc)
             job.retry_count += 1
             job.error = str(exc)
 
@@ -112,7 +133,7 @@ async def process_job(job_id_str: str) -> None:
                 delay = BASE_RETRY_DELAY * (2 ** (job.retry_count - 1))
                 logger.info(
                     "[%s] Retrying job %s in %ds (attempt %d/%d)",
-                    settings.WORKER_ID, job_id_str, delay, job.retry_count, job.max_retries,
+                    worker_id, job_id_str, delay, job.retry_count, job.max_retries,
                 )
                 job.status = "QUEUED"
                 await db.commit()
@@ -122,7 +143,7 @@ async def process_job(job_id_str: str) -> None:
                 job.status = "FAILED"
                 job.finished_at = datetime.now(timezone.utc)
                 await db.commit()
-                logger.info("[%s] Job %s permanently FAILED", settings.WORKER_ID, job_id_str)
+                logger.info("[%s] Job %s permanently FAILED", worker_id, job_id_str)
 
         finally:
             stop_event.set()
@@ -133,16 +154,17 @@ async def process_job(job_id_str: str) -> None:
                 pass
 
 
-async def worker_loop() -> None:
-    logger.info("[%s] Worker started.", settings.WORKER_ID)
+async def worker_loop(worker_id: str = "worker-1") -> None:
+    logger.info("[%s] Worker started.", worker_id)
     while True:
         try:
             job_id = await dequeue_job(timeout=2.0)
             if job_id is None:
                 continue
-            await process_job(job_id)
+            await process_job(job_id, worker_id=worker_id)
         except asyncio.CancelledError:
+            logger.info("[%s] Worker shutting down.", worker_id)
             break
         except Exception as e:
-            logger.exception("Unexpected worker error: %s", e)
+            logger.exception("[%s] Unexpected error: %s", worker_id, e)
             await asyncio.sleep(1)

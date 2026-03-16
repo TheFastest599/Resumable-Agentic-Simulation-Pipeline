@@ -30,7 +30,10 @@ async def main(concurrency: int) -> None:
 
     from workers.worker import worker_loop
 
-    tasks = [asyncio.create_task(worker_loop()) for _ in range(concurrency)]
+    tasks = [
+        asyncio.create_task(worker_loop(worker_id=f"worker-{i+1}"))
+        for i in range(concurrency)
+    ]
     logger.info("Started %d worker(s). Press Ctrl+C to stop.", concurrency)
     try:
         await asyncio.gather(*tasks)
