@@ -103,7 +103,7 @@ async def list_recent_jobs() -> str:
     from services.job_service import list_jobs
 
     db, _, conv_id = _get_ctx()
-    jobs = await list_jobs(db, conversation_id=conv_id, limit=1000 if conv_id else 20)
+    jobs, _ = await list_jobs(db, conversation_id=conv_id, limit=1000 if conv_id else 20)
     return json.dumps([
         {
             "job_id": str(j.id),

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as aioredis
 from core.db import get_db
 from core.redis_client import get_redis
-from schemas.job import JobListResponse, JobResponse, JobSubmitRequest
+from schemas.job import JobListResponse, JobResponse, JobSubmitRequest, JobSummary
 from services.job_service import (
     cancel_job,
     get_job,
@@ -39,12 +39,16 @@ async def read_jobs(
     status: Optional[str] = None,
     conversation_id: Optional[uuid.UUID] = None,
     limit: int = 50,
+    page: int = 1,
     db: AsyncSession = Depends(get_db),
 ):
-    jobs = await list_jobs(db, status=status, conversation_id=conversation_id, limit=limit)
+    offset = (max(page, 1) - 1) * limit
+    jobs, total = await list_jobs(
+        db, status=status, conversation_id=conversation_id, limit=limit, offset=offset
+    )
     return JobListResponse(
-        jobs=[JobResponse.model_validate(j) for j in jobs],
-        total=len(jobs),
+        jobs=[JobSummary.model_validate(j) for j in jobs],
+        total=total,
     )
 
 

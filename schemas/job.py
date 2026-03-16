@@ -35,6 +35,26 @@ class JobResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class JobSummary(BaseModel):
+    """Lightweight job shape returned by GET /jobs (no payload or result)."""
+    id: uuid.UUID
+    task_name: str
+    status: str
+    priority: int
+    progress: float
+    error: str | None
+    retry_count: int
+    max_retries: int
+    worker_id: str | None
+    conversation_id: uuid.UUID | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class JobListResponse(BaseModel):
-    jobs: list[JobResponse]
+    jobs: list[JobSummary]
     total: int

@@ -3,7 +3,8 @@ import uuid
 from typing import Optional
 
 import redis.asyncio as aioredis
-from sqlalchemy import select
+from sqlalchemy import select, func
+from sqlalchemy.orm import load_only
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.redis_client import enqueue_job, remove_job_from_queue, set_pause_flag
@@ -124,14 +125,35 @@ async def list_jobs(
     status: Optional[str] = None,
     conversation_id: Optional[uuid.UUID] = None,
     limit: int = 50,
-) -> list[Job]:
-    stmt = select(Job).order_by(Job.created_at.desc()).limit(limit)
+    offset: int = 0,
+) -> tuple[list[Job], int]:
+    filters = []
     if status:
-        stmt = stmt.where(Job.status == status)
+        filters.append(Job.status == status)
     if conversation_id:
-        stmt = stmt.where(Job.conversation_id == conversation_id)
+        filters.append(Job.conversation_id == conversation_id)
+
+    count_stmt = select(func.count()).select_from(Job)
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    stmt = (
+        select(Job)
+        .options(load_only(
+            Job.id, Job.task_name, Job.status, Job.priority, Job.progress,
+            Job.error, Job.retry_count, Job.max_retries, Job.worker_id,
+            Job.conversation_id, Job.created_at, Job.started_at,
+            Job.finished_at, Job.updated_at,
+        ))
+        .order_by(Job.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    if filters:
+        stmt = stmt.where(*filters)
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return list(result.scalars().all()), total
 
 
 async def list_jobs_for_conversation(

@@ -84,9 +84,9 @@ async def agent_chat_stream(
 # ─── Conversation CRUD ────────────────────────────────────────────────────────
 
 @router.get("/conversations", response_model=list[ConversationResponse])
-async def list_conversations(limit: int = 50, db: AsyncSession = Depends(get_db)):
+async def list_conversations(limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)):
     """List conversations ordered by most recent first."""
-    stmt = select(Conversation).order_by(Conversation.created_at.desc()).limit(limit)
+    stmt = select(Conversation).order_by(Conversation.created_at.desc()).limit(limit).offset(offset)
     result = await db.execute(stmt)
     convs = result.scalars().all()
     return [ConversationResponse(id=c.id, name=c.name, created_at=c.created_at) for c in convs]
