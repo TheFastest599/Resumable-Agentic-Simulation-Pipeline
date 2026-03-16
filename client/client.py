@@ -234,7 +234,7 @@ def _print_history(messages: list[dict]) -> None:
     print()
     for m in messages:
         if m["role"] == "user":
-            print(f"  {_bold('You')}   : {_user_msg(m['text'])}")
+            print(f"  {_bold(Fore.YELLOW + 'You' + Style.RESET_ALL)}   : {_user_msg(m['text'])}")
         else:
             print(f"  {_bold('Agent')} : {_agent_msg(m['text'])}")
     print()
@@ -268,7 +268,7 @@ def _repl_chat_loop(
 
     while True:
         try:
-            msg = input(f"  {_dim('>')} ").strip()
+            msg = input(f"  {_bold(Fore.YELLOW + 'You' + Style.RESET_ALL)}   : ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -288,7 +288,6 @@ def _repl_chat_loop(
             continue
 
         local_history.append({"role": "user", "text": msg})
-        print(f"  {_bold('You')}   : {_user_msg(msg)}")
 
         try:
             resp = client.chat(msg, conversation_id=conversation_id)
@@ -324,6 +323,46 @@ _STATUS_COLOR = {
 
 def _colored_status(status: str) -> str:
     return f"{_STATUS_COLOR.get(status, '')}{status}{Style.RESET_ALL}"
+
+
+def _print_job(job: dict) -> None:
+    """Print every field returned by GET /jobs/{id}."""
+    LABELS = [
+        ("id",              "ID"),
+        ("task_name",       "Task"),
+        ("status",          "Status"),
+        ("priority",        "Priority"),
+        ("progress",        "Progress"),
+        ("worker_id",       "Worker"),
+        ("conversation_id", "Conv ID"),
+        ("retry_count",     "Retries"),
+        ("max_retries",     "Max Retries"),
+        ("created_at",      "Created"),
+        ("started_at",      "Started"),
+        ("finished_at",     "Finished"),
+        ("updated_at",      "Updated"),
+        ("error",           "Error"),
+        ("result",          "Result"),
+        ("payload",         "Payload"),
+    ]
+    print()
+    for key, label in LABELS:
+        val = job.get(key)
+        if val is None:
+            continue
+        if key == "status":
+            val = _colored_status(str(val))
+        elif key == "progress":
+            val = _info("%.0f%%" % (val * 100))
+        elif key in ("result", "payload") and isinstance(val, dict):
+            val = "\n" + "\n".join("    " + l for l in json.dumps(val, indent=2).splitlines())
+            val = _ok(val) if key == "result" else _dim(val)
+        elif key == "error":
+            val = _err(str(val))
+        else:
+            val = str(val)
+        print(f"  {_bold('%-14s' % label)}: {val}")
+    print()
 
 
 def _run_repl(client: SimulationClient) -> None:
@@ -380,13 +419,7 @@ def _run_repl(client: SimulationClient) -> None:
                 continue
             try:
                 job = client.get_job(args[0])
-                print(f"  Status   : {_colored_status(job['status'])}")
-                pct = "%.0f%%" % (job['progress'] * 100)
-                print(f"  Progress : {_info(pct)}")
-                if job.get("result"):
-                    print(f"  Result   :\n{_ok(json.dumps(job['result'], indent=4))}")
-                if job.get("error"):
-                    print(f"  Error    : {_err(job['error'])}")
+                _print_job(job)
             except httpx.HTTPStatusError as e:
                 print(f"  {_err('Error:')} {e.response.status_code} — {e.response.text}")
             except Exception as e:
@@ -592,11 +625,7 @@ def main() -> None:
 
     elif args.command == "status":
         job = client.get_job(args.job_id)
-        print(f"Status:   {job['status']}  Progress: {job['progress']:.0%}")
-        if job.get("result"):
-            print("Result:", json.dumps(job["result"], indent=2))
-        if job.get("error"):
-            print("Error:", job["error"])
+        _print_job(job)
 
     elif args.command == "list":
         data = client.list_jobs(status=args.status, conversation_id=args.conversation_id, limit=args.limit)
