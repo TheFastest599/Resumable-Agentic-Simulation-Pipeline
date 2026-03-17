@@ -91,6 +91,7 @@ cp .env.example .env
 ```bash
 uvicorn api.main:app --reload
 # Tables are created automatically on first startup
+# Interactive API docs available at http://localhost:8000/docs
 ```
 
 ### 5. Start worker(s)
