@@ -44,6 +44,23 @@ User
 
 ---
 
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **API** | Python 3.11, FastAPI, Uvicorn |
+| **Database** | PostgreSQL, SQLAlchemy 2.0 async, asyncpg |
+| **Queue** | Redis (Memurai on Windows) — sorted set priority queue |
+| **Workers** | asyncio, ThreadPoolExecutor (for NumPy tasks) |
+| **Simulations** | NumPy, SciPy — 30 tasks across 6 categories |
+| **LLM Agent** | LangChain, LangChain-Groq, `openai/gpt-oss-120b` via Groq API |
+| **Streaming** | Server-Sent Events (SSE) — custom protocol |
+| **Web Client** | Next.js 15 (App Router), React, TanStack Query, Zustand, shadcn/ui, Tailwind CSS |
+| **CLI Client** | Python (httpx, prompt_toolkit) — interactive REPL + arg-based mode |
+| **Schema / Validation** | Pydantic v2 |
+
+---
+
 ## Setup & Run
 
 ### 1. Prerequisites
