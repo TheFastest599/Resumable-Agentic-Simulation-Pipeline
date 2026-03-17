@@ -68,10 +68,10 @@ export function useStream() {
           } else if (event.type === "done") {
             finalConvId = event.conversation_id;
             store.setActiveConvId(finalConvId);
-            qc.invalidateQueries({ queryKey: ["conversations"] });
             qc.invalidateQueries({ queryKey: ["jobs"] });
-            // Navigate to the conversation URL if not already there
+            // Only refetch conversation list when a new conversation was created
             if (!conversationId) {
+              qc.invalidateQueries({ queryKey: ["conversations"] });
               router.replace(`/chat/${finalConvId}`);
             }
           } else if (event.type === "error") {
