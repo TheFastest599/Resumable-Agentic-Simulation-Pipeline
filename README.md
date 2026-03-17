@@ -1,5 +1,7 @@
 # Resumable Agentic Simulation Pipeline
 
+![RASP Home](assets/home.png)
+
 A **Resumable Distributed Simulation Engine** with a LangGraph ReAct agent, PostgreSQL job state, Redis priority queue, and async workers — all running locally without Docker.
 
 ---
@@ -177,3 +179,44 @@ python -m client.client chat "Run 5 pi simulations"
 ## One Thing I'd Do Differently
 
 I'd make the job progress experience fully real-time. Currently the web client polls `GET /jobs/{id}` every 3 seconds — good enough, but you see progress jump in steps and there's always a lag before the final status appears. With more time I'd add a per-job SSE or WebSocket channel so the worker streams progress increments directly to the browser as they happen: `0.1 → 0.2 → ... → 1.0 → COMPLETED`. The infrastructure is mostly there (workers already call `progress_cb`, the SSE path exists for chat) — it just needs a Redis pub/sub fan-out and a `GET /jobs/{id}/stream` endpoint to wire it up end-to-end.
+
+---
+
+## Gallery
+
+### Web Client — Chat
+
+<table>
+  <tr>
+    <td><img src="assets/1.png" alt="Chat: 5 parallel Monte Carlo π simulations" width="100%"/><br/><sub>5 parallel Monte Carlo π simulations submitted in one turn</sub></td>
+    <td><img src="assets/2.png" alt="Chat: parallel heat simulations" width="100%"/><br/><sub>Agent asks for missing parameters before submitting 4 heat simulations</sub></td>
+    <td><img src="assets/3.png" alt="Chat: DAG workflow with tool call expanded" width="100%"/><br/><sub>DAG workflow — wave propagation depends on Gray-Scott; tool call expanded showing input/output</sub></td>
+  </tr>
+  <tr>
+    <td><img src="assets/4.png" alt="Chat: check_job_status tool calls" width="100%"/><br/><sub>Agent checking status of all conversation jobs — tool call cards expanded</sub></td>
+    <td colspan="2"><img src="assets/5.png" alt="Chat: DAG status check after completion" width="100%"/><br/><sub>Agent reports both DAG jobs (Gray-Scott → wave propagation) completed successfully</sub></td>
+  </tr>
+</table>
+
+### Web Client — Jobs & Tasks
+
+<table>
+  <tr>
+    <td><img src="assets/jobs.png" alt="Jobs list page" width="100%"/><br/><sub>Jobs page — filtered by conversation ID, paginated, scrollable table</sub></td>
+    <td><img src="assets/job.png" alt="Job detail page" width="100%"/><br/><sub>Job detail — status, progress bar, timestamps, payload and result JSON</sub></td>
+    <td><img src="assets/tasks.png" alt="Tasks browser" width="100%"/><br/><sub>Task browser — all 30 simulation tasks with default payloads and "Ask agent" shortcut</sub></td>
+  </tr>
+</table>
+
+### CLI / REPL
+
+<table>
+  <tr>
+    <td><img src="assets/terminal0.png" alt="CLI: /help and /list" width="100%"/><br/><sub>REPL — <code>/help</code> command reference and <code>/list</code> showing all jobs</sub></td>
+    <td><img src="assets/terminal1.png" alt="CLI: /chat resuming conversation" width="100%"/><br/><sub>REPL — <code>/chat &lt;conv_id&gt;</code> resumes a conversation with full history</sub></td>
+  </tr>
+  <tr>
+    <td><img src="assets/terminal2.png" alt="CLI: /status detail" width="100%"/><br/><sub>REPL — <code>/status</code> showing full job detail including result JSON</sub></td>
+    <td><img src="assets/terminal3.png" alt="CLI: /tasks list" width="100%"/><br/><sub>REPL — <code>/tasks</code> listing all 30 simulation tasks with descriptions</sub></td>
+  </tr>
+</table>
