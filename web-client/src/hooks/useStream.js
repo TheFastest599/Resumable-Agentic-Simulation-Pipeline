@@ -14,13 +14,17 @@ export function useStream() {
   const sendMessage = async (message, conversationId) => {
     if (store.isStreaming) return;
 
+    // Record where this turn starts before appending anything
+    const turnStartIdx = useChatStore.getState().messages.length;
+
     // Optimistic user message
     store.appendMessage({ role: "user", content: message, id: crypto.randomUUID() });
-    // Empty assistant placeholder
-    store.appendMessage({ role: "assistant", content: "", id: crypto.randomUUID() });
     store.setIsStreaming(true);
+    store.setIsTyping(true);
     store.clearTools();
 
+    // Assistant placeholder is added on the first token so tool cards appear above it
+    let assistantAdded = false;
     let finalConvId = conversationId;
 
     try {
@@ -60,11 +64,19 @@ export function useStream() {
           }
 
           if (event.type === "token") {
-            store.updateLastAssistant(event.content);
+            if (!assistantAdded) {
+              store.setIsTyping(false);
+              store.appendMessage({ role: "assistant", content: event.content, id: crypto.randomUUID() });
+              assistantAdded = true;
+            } else {
+              store.updateLastAssistant(event.content);
+            }
           } else if (event.type === "tool_start") {
             store.addTool(event.name);
+            store.addToolMessage(event.name, event.input, turnStartIdx);
           } else if (event.type === "tool_end") {
             store.removeTool(event.name);
+            store.resolveToolMessage(event.name, event.output);
           } else if (event.type === "done") {
             finalConvId = event.conversation_id;
             store.setActiveConvId(finalConvId);
@@ -81,10 +93,17 @@ export function useStream() {
       }
     } catch (err) {
       toast.error(err.message ?? "Stream failed");
-      // Remove empty assistant placeholder on error
-      store.setMessages(store.messages.slice(0, -1));
+      // Remove empty assistant placeholder if it was added but has no content
+      if (assistantAdded) {
+        store.setMessages(
+          useChatStore.getState().messages.filter(
+            (m) => !(m.role === "assistant" && m.content === "")
+          )
+        );
+      }
     } finally {
       store.setIsStreaming(false);
+      store.setIsTyping(false);
       store.clearTools();
     }
   };

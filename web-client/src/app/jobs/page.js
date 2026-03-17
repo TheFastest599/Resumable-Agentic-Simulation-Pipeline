@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,7 @@ const STATUSES = [
 ];
 const PAGE_SIZE = 20;
 
-export default function JobsPage() {
+function JobsContent() {
 	const searchParams = useSearchParams();
 	const [status, setStatus] = useState("ALL");
 	const [convId, setConvId] = useState(
@@ -141,5 +141,13 @@ export default function JobsPage() {
 				</div>
 			</div>
 		</div>
+	);
+}
+
+export default function JobsPage() {
+	return (
+		<Suspense>
+			<JobsContent />
+		</Suspense>
 	);
 }

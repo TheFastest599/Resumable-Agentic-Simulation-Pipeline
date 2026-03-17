@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import MessageBubble from "./MessageBubble";
 import ToolCallIndicator from "./ToolCallIndicator";
+import ToolCallMessage from "./ToolCallMessage";
 import useChatStore from "@/store/chatStore";
 import { useStream } from "@/hooks/useStream";
 
 export default function ChatPanel({ conversationId }) {
-  const { messages, isStreaming, activeTools } = useChatStore();
+  const { messages, isStreaming, isTyping, activeTools } = useChatStore();
   const { sendMessage } = useStream();
   const [input, setInput] = useState("");
   const bottomRef = useRef(null);
@@ -42,13 +43,32 @@ export default function ChatPanel({ conversationId }) {
               Start a conversation — ask the agent to run simulations.
             </p>
           )}
-          {messages.map((msg) => (
-            <MessageBubble key={msg.id} role={msg.role} content={msg.content} />
-          ))}
+          {messages.map((msg) =>
+            msg.role === "tool" ? (
+              <ToolCallMessage
+                key={msg.id}
+                name={msg.name}
+                input={msg.input}
+                output={msg.output}
+                done={msg.done}
+              />
+            ) : (
+              <MessageBubble key={msg.id} role={msg.role} content={msg.content} />
+            )
+          )}
           {isStreaming && activeTools.length > 0 && (
             <div className="flex justify-start">
               <div className="max-w-[75%]">
                 <ToolCallIndicator tools={activeTools} />
+              </div>
+            </div>
+          )}
+          {isTyping && (
+            <div className="flex justify-start">
+              <div className="rounded-2xl bg-muted px-4 py-3 flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce [animation-delay:0ms]" />
+                <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce [animation-delay:150ms]" />
+                <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce [animation-delay:300ms]" />
               </div>
             </div>
           )}
